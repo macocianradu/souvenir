@@ -17,14 +17,17 @@ import (
 var logger *slog.Logger
 
 type model struct {
-	viewport      viewport.Model
-	messages      []llm.Message
-	textarea      textarea.Model
-	senderStyle   lipgloss.Style
-	receiverStyle lipgloss.Style
-	client        llm.LLMClient
-	waiting       bool
-	err           error
+	viewport    viewport.Model
+	messages    []llm.Message
+	textarea    textarea.Model
+	senderStyle lipgloss.Style
+	agentStyle  lipgloss.Style
+	errorStyle  lipgloss.Style
+	client      llm.LLMClient
+	width		int
+	height		int
+	waiting     bool
+	err         error
 }
 
 type agentResponseMessage struct {
@@ -52,7 +55,7 @@ func InitialModel(config config.Config) model {
 	ta.ShowLineNumbers = false
 
 	vp := viewport.New(viewport.WithWidth(30), viewport.WithHeight(5))
-	vp.SetContent(`What are we doing on today?`)
+	vp.SetContent(renderLanding(vp.Width(), vp.Height()))
 	vp.KeyMap.Left.SetEnabled(false)
 	vp.KeyMap.Right.SetEnabled(false)
 
@@ -63,6 +66,8 @@ func InitialModel(config config.Config) model {
 		messages:    []llm.Message{},
 		viewport:    vp,
 		senderStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		errorStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		agentStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
 		client:      llm.LLMClient{Cfg: config},
 		err:         nil,
 	}
@@ -76,14 +81,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		logger.Debug("Received WindowSizeMsg", "width", msg.Width, "height", msg.Height)
-		m.viewport.SetWidth(msg.Width)
-		m.textarea.SetWidth(msg.Width)
+		m.viewport.SetWidth(msg.Width * 80 / 100)
+		m.textarea.SetWidth(msg.Width * 80 / 100)
 		m.viewport.SetHeight(msg.Height - m.textarea.Height())
+		m.width = msg.Width
+		m.height = msg.Height
 
-		var messages = getMessages(m.messages)
+		var messages = m.renderMessages()
 
 		if len(m.messages) > 0 {
 			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+		} else {
+			m.viewport.SetContent(renderLanding(m.viewport.Width(), m.viewport.Height()))
 		}
 		m.viewport.GotoBottom()
 
@@ -97,11 +106,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			input := m.textarea.Value()
 			m.messages = append(m.messages, llm.Message{
-				Content: m.senderStyle.Render(input),
-				Role:    "You",
+				Content: input,
+				Role:    "user",
 			})
 			logger.Debug("Received enter. Creating new message", "message", input)
-			var messages = getMessages(m.messages)
+			var messages = m.renderMessages()
 			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
@@ -135,7 +144,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			logger.Debug("Appending response message", "message", r)
 			m.messages = append(m.messages, r)
 		}
-		var messages = getMessages(m.messages)
+		var messages = m.renderMessages()
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
 		return m, nil
 	}
@@ -144,15 +153,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() tea.View {
-	viewportView := m.viewport.View()
-	v := tea.NewView(viewportView + "\n" + m.textarea.View())
+	ui := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.viewport.View(),
+		m.textarea.View())
 	c := m.textarea.Cursor()
 	if c != nil {
-		c.Y += lipgloss.Height(viewportView)
+		c.Y += lipgloss.Height(m.viewport.View())
+		gap := m.width - lipgloss.Width(ui)
+		c.X += max(gap / 2, 0)
 	}
-	v.Cursor = c
-	v.AltScreen = true
-	return v
+	view := tea.NewView(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, ui))
+	view.Cursor = c
+	view.AltScreen = true
+	return view
 }
 
 func (m model) callAgent(input string, messages []llm.Message) tea.Cmd {
@@ -163,13 +177,32 @@ func (m model) callAgent(input string, messages []llm.Message) tea.Cmd {
 	}
 }
 
-func getMessages(m []llm.Message) string {
-	var messages strings.Builder
-	for _, m := range m {
-		messages.WriteString(m.Role)
-		messages.WriteString(": ")
-		messages.WriteString(m.Content)
-		messages.WriteString("\n")
+func (m model) renderMessages() string {
+	var result strings.Builder
+	var width = m.viewport.Width()
+	for _, message := range m.messages {
+		switch message.Role {
+		case "user":
+			var line strings.Builder
+			line.WriteString(m.senderStyle.Render("You: "))
+			line.WriteString(message.Content)
+			result.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Right, line.String()))
+		case "assistant":
+			result.WriteString(m.agentStyle.Render("Agent: "))
+			result.WriteString(message.Content)
+		case "error":
+			result.WriteString(m.errorStyle.Render("Error:"))
+			result.WriteString(message.Content)
+		}
+		result.WriteString("\n")
+
+		var sepStyle lipgloss.Style = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			MarginTop(1).
+			MarginBottom(1)
+		sep := sepStyle.Render(strings.Repeat("┈", width))
+		result.WriteString(sep)
+		result.WriteString("\n")
 	}
-	return messages.String()
+	return result.String()
 }
