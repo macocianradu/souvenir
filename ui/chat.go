@@ -12,13 +12,14 @@ import (
 	"charm.land/lipgloss/v2"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
+	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
 var logger *slog.Logger
 
-type model struct {
+type uiModel struct {
 	viewport    viewport.Model
-	messages    []llm.Message
+	messages    []model.Message
 	textarea    textarea.Model
 	senderStyle lipgloss.Style
 	agentStyle  lipgloss.Style
@@ -31,11 +32,11 @@ type model struct {
 }
 
 type agentResponseMessage struct {
-	response []llm.Message
+	response []model.Message
 	err      error
 }
 
-func InitialModel(config config.Config) model {
+func InitialModel(config config.Config) uiModel {
 	logger = slog.Default().With("Component", "UI")
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
@@ -61,9 +62,9 @@ func InitialModel(config config.Config) model {
 
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
-	return model{
+	return uiModel{
 		textarea:    ta,
-		messages:    []llm.Message{},
+		messages:    []model.Message{},
 		viewport:    vp,
 		senderStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 		errorStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
@@ -73,17 +74,17 @@ func InitialModel(config config.Config) model {
 	}
 }
 
-func (m model) Init() tea.Cmd {
+func (m uiModel) Init() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		logger.Debug("Received WindowSizeMsg", "width", msg.Width, "height", msg.Height)
 		m.viewport.SetWidth(msg.Width * 80 / 100)
 		m.textarea.SetWidth(msg.Width * 80 / 100)
-		m.viewport.SetHeight(msg.Height - m.textarea.Height())
+		m.viewport.SetHeight(msg.Height - lipgloss.Height(m.textarea.View()))
 		m.width = msg.Width
 		m.height = msg.Height
 
@@ -94,18 +95,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.SetContent(renderLanding(m.viewport.Width(), m.viewport.Height()))
 		}
+		logger.Debug("New sizes",
+			"vp width", m.viewport.Width(), "vp height", m.viewport.Height(),
+			"ta width", m.textarea.Width(), "ta height", m.textarea.Height())
 		m.viewport.GotoBottom()
 
 	case tea.KeyPressMsg:
-		logger.Debug("Received KeyPressMsg")
+		logger.Debug("Received KeyPressMsg", "msg", msg)
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			logger.Debug("Received exit sequence. Quiting")
 			fmt.Println(m.textarea.Value())
 			return m, tea.Quit
+		case "shift+enter", "ctrl+j", "alt+enter":
+			m.textarea.InsertRune('\n')
+			return m, nil
 		case "enter":
 			input := m.textarea.Value()
-			m.messages = append(m.messages, llm.Message{
+			m.messages = append(m.messages, model.Message{
 				Content: input,
 				Role:    "user",
 			})
@@ -134,7 +141,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resp := msg.response
 		if msg.err != nil {
 			logger.Error("Message is error", "error", msg.err)
-			resp = []llm.Message{{
+			resp = []model.Message{{
 				Role:    "Error",
 				Content: msg.err.Error(),
 			}}
@@ -146,13 +153,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var messages = m.renderMessages()
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+		m.viewport.GotoBottom()
 		return m, nil
 	}
 
 	return m, nil
 }
 
-func (m model) View() tea.View {
+func (m uiModel) View() tea.View {
 	ui := lipgloss.JoinVertical(
 		lipgloss.Left,
 		m.viewport.View(),
@@ -169,7 +177,7 @@ func (m model) View() tea.View {
 	return view
 }
 
-func (m model) callAgent(input string, messages []llm.Message) tea.Cmd {
+func (m uiModel) callAgent(input string, messages []model.Message) tea.Cmd {
 	logger.Debug("Calling agent", "query", input, "messages", messages)
 	return func() tea.Msg {
 		resp, err := m.client.Call(input, messages)
@@ -177,7 +185,7 @@ func (m model) callAgent(input string, messages []llm.Message) tea.Cmd {
 	}
 }
 
-func (m model) renderMessages() string {
+func (m uiModel) renderMessages() string {
 	var result strings.Builder
 	var width = m.viewport.Width()
 	for _, message := range m.messages {

@@ -14,6 +14,25 @@ type Config struct {
 	Api     ApiConfig
 	Llm     LLMConfig
 	Logging []LogConfig
+	Db      DbConfig
+}
+
+type DbConfig struct {
+	Url      string
+	Port     string
+	DbName   string
+	User     string
+	Password string
+	History  HistoryConfig
+	Memory   MemoryConfig
+}
+
+type MemoryConfig struct {
+	Enabled bool
+}
+
+type HistoryConfig struct {
+	Enabled bool
 }
 
 type ApiConfig struct {
