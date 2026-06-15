@@ -38,9 +38,18 @@ const Wordmark = `
 	\__ \ (_) | |_| |\ V /  __/ | | | | |
 	|___/\___/ \__,_| \_/ \___|_| |_|_|_|`
 
+const Commands = `
+/models
+/exit
+`
+
 func renderLanding(width int, height int) string {
 	return lipgloss.PlaceVertical(height, 0.7,
-		lipgloss.PlaceHorizontal(width,
-			lipgloss.Center,
-			lipgloss.JoinHorizontal(lipgloss.Center, Logo, Wordmark)))
+		lipgloss.JoinVertical(lipgloss.Center,
+			lipgloss.PlaceHorizontal(width,
+				lipgloss.Center,
+				lipgloss.JoinHorizontal(lipgloss.Center, Logo, Wordmark)),
+			lipgloss.PlaceHorizontal(width,
+				lipgloss.Center,
+				Commands)))
 }

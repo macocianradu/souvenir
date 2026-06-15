@@ -13,8 +13,12 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
+const COMPLETIONS_API = "/v1/chat/completions"
+const MODELS_API = "/v1/models"
+
 type LLMClient struct {
-	Cfg config.Config
+	Cfg    config.Config
+	Logger slog.Logger
 }
 
 // Request Types
@@ -48,9 +52,49 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+func (client LLMClient) Models() ([]string, error) {
+	resp, err := http.Get(client.Cfg.Api.Url + MODELS_API)
+	if err != nil {
+		client.Logger.Error("There was an error during the network request", "error", err.Error())
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		client.Logger.Error("There was an error reading the response body", "error", err.Error())
+		return nil, err
+	}
+
+	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		client.Logger.Error("Call returned non 200 status",
+			"statusCode", resp.StatusCode,
+			"status", resp.Status)
+		return nil,
+			errors.New("Call returned invalid status " +
+				strconv.Itoa(resp.StatusCode) +
+				resp.Status)
+	}
+	client.Logger.Debug("Received data", "data", data)
+
+	var response struct{
+		Data []struct{
+			Id string
+		}
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		client.Logger.Error("There was an error parsing the response", "error", err.Error())
+		return nil, err
+	}
+	client.Logger.Debug("Unmarshal response", "data", response)
+	var ret []string
+	for _, m := range response.Data {
+		ret = append(ret, m.Id)
+	}
+	return ret, nil
+}
+
 func (client LLMClient) Call(query string, messages []model.Message) ([]model.Message, error) {
-	return []model.Message{{Role: "assistant", Content: "message 1"}, {Role: "assistant", Content: "message 2"}}, nil
-	var logger = slog.Default().With("Component", "LLM Client")
 	requestBody := ChatRequest{
 		Model:    client.Cfg.Llm.Model,
 		Messages: messages,
@@ -62,29 +106,31 @@ func (client LLMClient) Call(query string, messages []model.Message) ([]model.Me
 	}
 
 	body := bytes.NewBuffer(serialized)
-	logger.Debug("Executing llm call", "query", query, "messages", messages, "body", serialized)
-	req, err := http.NewRequest("POST", client.Cfg.Api.Url, body)
+	req, err := http.NewRequest("POST", client.Cfg.Api.Url + COMPLETIONS_API, body)
 	if err != nil {
-		logger.Error("There was an error creating the request", "error", err.Error())
+		client.Logger.Error("There was an error creating the request", "error", err.Error())
 		return []model.Message{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+client.Cfg.Api.Key)
+	if client.Cfg.Api.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+client.Cfg.Api.Key)
+	}
+	client.Logger.Debug("Executing llm call", "req", req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Error("There was an error during http call", "error", err.Error())
+		client.Logger.Error("There was an error during http call", "error", err.Error())
 		return []model.Message{}, err
 	}
-	logger.Debug("LLM Call returned", "response", resp)
+	client.Logger.Debug("LLM Call returned", "response", resp)
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logger.Error("There was an error reading the response body", "error", err.Error())
+		client.Logger.Error("There was an error reading the response body", "error", err.Error())
 		return []model.Message{}, err
 	}
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		logger.Error("Call returned non 200 status",
+		client.Logger.Error("Call returned non 200 status",
 			"statusCode", resp.StatusCode,
 			"status", resp.Status)
 		return []model.Message{},
@@ -93,20 +139,20 @@ func (client LLMClient) Call(query string, messages []model.Message) ([]model.Me
 				resp.Status)
 	}
 
-	logger.Debug("Received data", "data", data)
+	client.Logger.Debug("Received data", "data", data)
 	var response ChatResponse
 	if err := json.Unmarshal(data, &response); err != nil {
-		logger.Error("There was an error parsing the response", "error", err.Error())
+		client.Logger.Error("There was an error parsing the response", "error", err.Error())
 		return []model.Message{}, err
 	}
 
 	var result []model.Message
 	if len(response.Choices) == 0 {
-		logger.Error("The call returned an empty response")
+		client.Logger.Error("The call returned an empty response")
 		return []model.Message{}, errors.New("The call returned an empty response")
 	}
 	for _, choice := range response.Choices {
-		logger.Error("Appending response message", "message", choice.Message)
+		client.Logger.Error("Appending response message", "message", choice.Message)
 		result = append(result, choice.Message)
 	}
 

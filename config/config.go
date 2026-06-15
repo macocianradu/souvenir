@@ -107,28 +107,40 @@ func defaultConfig() *Config {
 			Key: ""},
 		LLMConfig{Model: ""},
 		[]LogConfig{{Level: slog.LevelInfo.Level(), Format: "text"}},
+		DbConfig{
+			Url:      "localhost",
+			User:     "psql",
+			Port:     "54321",
+			Password: "",
+			DbName:   "souvenir",
+			History:  HistoryConfig{Enabled: true},
+		},
 	}
 }
 
 func overrideFromEnv(cfg *Config) {
-	val := os.Getenv(ENV_PREFIX + "api__url")
-	if val != "" {
-		cfg.Api.Url = val
+	overrides := []struct {
+		conf *string
+		key  string
+	}{
+		{conf: &cfg.Api.Url, key: ENV_PREFIX + "api__url"},
+		{conf: &cfg.Api.Key, key: ENV_PREFIX + "api__key"},
+		{conf: &cfg.Llm.Model, key: ENV_PREFIX + "llm__model"},
+		{conf: &cfg.Db.DbName, key: ENV_PREFIX + "db__dbName"},
+		{conf: &cfg.Db.Url, key: ENV_PREFIX + "db__url"},
+		{conf: &cfg.Db.User, key: ENV_PREFIX + "db__user"},
+		{conf: &cfg.Db.Password, key: ENV_PREFIX + "db__password"},
+		{conf: &cfg.Db.Port, key: ENV_PREFIX + "db__port"},
 	}
-	val = os.Getenv(ENV_PREFIX + "api__key")
-	if val != "" {
-		cfg.Api.Key = val
-	}
-	val = os.Getenv(ENV_PREFIX + "llm__model")
-	if val != "" {
-		cfg.Llm.Model = val
+	for _, override := range(overrides) {
+		val := os.Getenv(override.key)
+		if val != "" {
+			*override.conf = val
+		}
 	}
 }
 
 func (cfg Config) validate() error {
-	if cfg.Api.Key == "" {
-		return errors.New("No API key configured")
-	}
 	if cfg.Api.Url == "" {
 		return errors.New("No API url configured")
 	}
