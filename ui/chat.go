@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db/history"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
@@ -19,24 +20,27 @@ type focusState int
 
 const (
 	focusChat focusState = iota
-	focusOverlay
+	focusModels
+	focusHistory
 )
 
 type uiModel struct {
-	logger      slog.Logger
-	viewport    viewport.Model
-	messages    []model.Message
-	textarea    textarea.Model
-	focus       focusState
-	picker      modelPicker
-	senderStyle lipgloss.Style
-	agentStyle  lipgloss.Style
-	errorStyle  lipgloss.Style
-	client      llm.LLMClient
-	width       int
-	height      int
-	waiting     bool
-	err         error
+	logger       slog.Logger
+	viewport     viewport.Model
+	conversation model.Conversation
+	textarea     textarea.Model
+	focus        focusState
+	picker       picker
+	senderStyle  lipgloss.Style
+	agentStyle   lipgloss.Style
+	errorStyle   lipgloss.Style
+	client       llm.LLMClient
+	errorMessage string
+	history      history.DbClient
+	width        int
+	height       int
+	waiting      bool
+	err          error
 }
 
 type agentResponseMessage struct {
@@ -44,12 +48,12 @@ type agentResponseMessage struct {
 	err      error
 }
 
-type modelsResponseMessage struct {
-	models []string
-	err    error
+type conversationSavedMessage struct {
+	conversation model.Conversation
+	err          error
 }
 
-func InitialModel(config config.Config) uiModel {
+func InitialModel(config config.Config, client history.DbClient) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -75,18 +79,19 @@ func InitialModel(config config.Config) uiModel {
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
 	model := uiModel{
-		textarea:    ta,
-		messages:    []model.Message{},
-		viewport:    vp,
-		senderStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		errorStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
-		agentStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
-		client:      llm.LLMClient{Cfg: config, Logger: *slog.Default().With("Component", "LLM")},
-		focus:       focusChat,
-		logger:      *slog.Default().With("Component", "TUI"),
-		err:         nil,
+		textarea:     ta,
+		conversation: model.Conversation{},
+		viewport:     vp,
+		senderStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		errorStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		agentStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
+		client:       llm.LLMClient{Cfg: config, Logger: *slog.Default().With("Component", "LLM")},
+		focus:        focusChat,
+		history:      client,
+		logger:       *slog.Default().With("Component", "TUI"),
+		err:          nil,
 	}
-	model.picker = newModelPicker(&model.focus)
+	model.picker = newPicker()
 	return model
 }
 
@@ -108,7 +113,7 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		var messages = m.renderMessages()
 
-		if len(m.messages) > 0 {
+		if len(m.conversation.Messages) > 0 {
 			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
 		} else {
 			m.viewport.SetContent(renderLanding(m.viewport.Width(), m.viewport.Height()))
@@ -119,14 +124,14 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case tea.KeyPressMsg:
-		if m.focus == focusOverlay {
+		if m.focus != focusChat {
 			picker, cmd := m.picker.Update(msg)
 			m.picker = picker
 			return m, cmd
 		}
 		switch msg.String() {
 		case "esc":
-			if m.focus == focusOverlay {
+			if m.focus != focusChat {
 				m.focus = focusChat
 			}
 			return m, nil
@@ -137,28 +142,35 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.InsertRune('\n')
 			return m, nil
 		case "enter":
+			m.clearErrorMessage()
 			input := m.textarea.Value()
-			m.messages = append(m.messages, model.Message{
-				Content: input,
-				Role:    "user",
-			})
+			m.textarea.SetValue("")
 			m.logger.Debug("Received enter. Creating new message", "message", input)
 			switch input {
+			case "/history":
+				m.logger.Debug("Received history call")
+				m.focus = focusHistory
+				return m, m.getHistory()
 			case "/models":
 				m.logger.Debug("Received models sequence")
-				m.focus = focusOverlay
+				m.focus = focusModels
 				return m, m.getModels()
 			case "/exit":
 				m.logger.Debug("Received exit sequence. Quiting")
 				fmt.Println(m.textarea.Value())
 				return m, tea.Quit
 			default:
+				m.conversation.Messages = append(m.conversation.Messages, model.Message{
+					Content: input,
+					Role:    "user",
+					Seq:     len(m.conversation.Messages) + 1,
+				})
 				var messages = m.renderMessages()
 				m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
 				m.textarea.Reset()
 				m.viewport.GotoBottom()
 				m.waiting = true
-				return m, m.callAgent(input, m.messages)
+				return m, tea.Batch(m.callAgent(input, m.conversation.Messages), m.saveConversation())
 			}
 		default:
 			var cmd tea.Cmd
@@ -178,29 +190,56 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resp := msg.response
 		if msg.err != nil {
 			m.logger.Error("Message is error", "error", msg.err)
-			resp = []model.Message{{
-				Role:    "Error",
-				Content: msg.err.Error(),
-			}}
+			m.setErrorMessage(msg.err.Error())
 		}
 
 		for _, r := range resp {
+			r.Seq = len(m.conversation.Messages) + 1
 			m.logger.Debug("Appending response message", "message", r)
-			m.messages = append(m.messages, r)
+			m.conversation.Messages = append(m.conversation.Messages, r)
 		}
 		var messages = m.renderMessages()
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
 		m.viewport.GotoBottom()
-		return m, nil
+		return m, m.saveConversation()
 
-	case modelChosenMsg:
-		m.logger.Debug("Received modelChosenMsg", "model", msg.id)
-		m.client.Cfg.Llm.Model = msg.id
+	case pickerChosenMsg:
+		switch m.focus {
+		case focusModels:
+			m.logger.Debug("Received pickerChosenMsg", "model", msg.id)
+			m.client.Cfg.Llm.Model = msg.id
+			m.waiting = false
+			m.focus = focusChat
+		case focusHistory:
+			m.logger.Debug("Received pickerChosenMsg", "history", msg.id)
+			conv, err := m.history.GetConversation(msg.id)
+			if err != nil {
+				m.logger.Error("Could not retrieve conversation", "id", msg.id)
+			}
+			m.conversation = conv
+			m.waiting = false
+			m.focus = focusChat
+			var messages = m.renderMessages()
+			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+			m.viewport.GotoBottom()
+		}
+
+	case pickerDismissMsg:
+		m.logger.Debug("Received pickerDismissMsg")
 		m.waiting = false
 		m.focus = focusChat
+
+	case conversationSavedMessage:
+		m.logger.Debug("Received conversationSavedMessage", "conversation", msg.conversation)
+		if msg.err != nil {
+			m.logger.Error("Message is error", "error", msg.err)
+			m.setErrorMessage(msg.err.Error())
+			return m, nil
+		}
+		m.conversation = msg.conversation
 	}
 
-	if m.focus == focusOverlay {
+	if m.focus != focusChat {
 		picker, cmd := m.picker.Update(msg)
 		m.picker = picker
 		return m, cmd
@@ -210,19 +249,28 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m uiModel) View() tea.View {
-	if m.focus == focusOverlay {
+	if m.focus != focusChat {
 		return tea.NewView(lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
 			m.picker.View()))
 	}
+
+	parts := []string{m.viewport.View()}
+	if m.errorMessage != "" {
+		parts = append(parts, m.errorStyle.Render(m.errorMessage))
+	}
+	parts = append(parts, "model: "+m.client.Cfg.Llm.Model+"; url: "+m.client.Cfg.Api.Url)
+	parts = append(parts, m.textarea.View())
 	ui := lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.viewport.View(),
-		"model: " + m.client.Cfg.Llm.Model + "; url: " + m.client.Cfg.Api.Url,
-		m.textarea.View())
+		parts...)
+
 	c := m.textarea.Cursor()
 	if c != nil {
 		c.Y += lipgloss.Height(m.viewport.View()) + 1
+		if m.errorMessage != "" {
+			c.Y++
+		}
 		gap := m.width - lipgloss.Width(ui)
 		c.X += max(gap/2, 0)
 	}
@@ -240,41 +288,96 @@ func (m uiModel) callAgent(input string, messages []model.Message) tea.Cmd {
 	}
 }
 
-func (m uiModel) getModels() tea.Cmd {
-	m.logger.Debug("Querying models")
+func (m uiModel) saveConversation() tea.Cmd {
+	m.logger.Debug("Saving conversation", "conversation", m.conversation)
 	return func() tea.Msg {
-		resp, _ := m.client.Models()
-		m.logger.Debug("Received models from llm", "models", resp)
-		return modelsLoadedMsg{models: resp}
+		conv, err := m.history.SaveConversation(m.conversation)
+		return conversationSavedMessage{conversation: conv, err: err}
 	}
 }
 
-func (m uiModel) renderMessages() string {
+func (m uiModel) getModels() tea.Cmd {
+	m.logger.Debug("Querying models")
+	return func() tea.Msg {
+		resp, err := m.client.Models()
+		if err != nil {
+			m.logger.Error("Could not fetch models", "error", err)
+		}
+		m.logger.Debug("Received models from llm", "models", resp)
+		items := []modelItem{}
+		for _, model := range resp {
+			items = append(items, modelItem{name: model, description: model})
+		}
+		return modelsLoadedMsg{models: items, title: "Choose a model"}
+	}
+}
+
+func (m uiModel) getHistory() tea.Cmd {
+	m.logger.Debug("Querying history")
+	return func() tea.Msg {
+		resp, err := m.history.GetConversations()
+		if err != nil {
+			m.logger.Error("Could not fetch history", "error", err)
+		}
+		m.logger.Debug("Received conversations from psql", "conversations", resp)
+		items := []modelItem{}
+		for _, conv := range resp {
+			name := conv.Id
+			if conv.Name != "" {
+				name = conv.Name
+			}
+			items = append(items, modelItem{name: name, description: conv.Summary})
+		}
+		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off"}
+	}
+}
+
+func (m *uiModel) renderMessages() string {
 	var result strings.Builder
 	var width = m.viewport.Width()
-	for _, message := range m.messages {
+	for _, message := range m.conversation.Messages {
 		switch message.Role {
 		case "user":
 			var line strings.Builder
 			line.WriteString(m.senderStyle.Render("You: "))
 			line.WriteString(message.Content)
 			result.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Right, line.String()))
+			result.WriteString("\n")
+
+			var sepStyle lipgloss.Style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				MarginTop(1).
+				MarginBottom(1)
+			sep := sepStyle.Render(strings.Repeat("┈", width))
+			result.WriteString(sep)
+			result.WriteString("\n")
 		case "assistant":
 			result.WriteString(m.agentStyle.Render("Agent: "))
 			result.WriteString(message.Content)
-		case "Error":
-			result.WriteString(m.errorStyle.Render("Error:"))
-			result.WriteString(message.Content)
-		}
-		result.WriteString("\n")
+			result.WriteString("\n")
 
-		var sepStyle lipgloss.Style = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			MarginTop(1).
-			MarginBottom(1)
-		sep := sepStyle.Render(strings.Repeat("┈", width))
-		result.WriteString(sep)
-		result.WriteString("\n")
+			var sepStyle lipgloss.Style = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				MarginTop(1).
+				MarginBottom(1)
+			sep := sepStyle.Render(strings.Repeat("┈", width))
+			result.WriteString(sep)
+			result.WriteString("\n")
+		}
 	}
 	return result.String()
+}
+
+func (m *uiModel) setErrorMessage(message string) {
+	if m.errorMessage == "" {
+		m.viewport.SetHeight(m.viewport.Height() - 1)
+	}
+	m.errorMessage = message
+}
+
+func (m *uiModel) clearErrorMessage() {
+	if m.errorMessage != "" {
+		m.viewport.SetHeight(m.viewport.Height() + 1)
+		m.errorMessage = ""
+	}
 }

@@ -39,6 +39,7 @@ const Wordmark = `
 	|___/\___/ \__,_| \_/ \___|_| |_|_|_|`
 
 const Commands = `
+/history
 /models
 /exit
 `

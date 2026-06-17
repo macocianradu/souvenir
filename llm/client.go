@@ -152,7 +152,7 @@ func (client LLMClient) Call(query string, messages []model.Message) ([]model.Me
 		return []model.Message{}, errors.New("The call returned an empty response")
 	}
 	for _, choice := range response.Choices {
-		client.Logger.Error("Appending response message", "message", choice.Message)
+		client.Logger.Debug("Appending response message", "message", choice.Message)
 		result = append(result, choice.Message)
 	}
 
