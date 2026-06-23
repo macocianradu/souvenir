@@ -16,9 +16,9 @@ import (
 const COMPLETIONS_API = "/v1/chat/completions"
 const MODELS_API = "/v1/models"
 
-type LLMClient struct {
+type ChatClient struct {
 	Cfg    config.Config
-	Logger slog.Logger
+	logger slog.Logger
 }
 
 // Request Types
@@ -52,22 +52,29 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-func (client LLMClient) Models() ([]string, error) {
-	resp, err := http.Get(client.Cfg.Api.Url + MODELS_API)
+func NewLLMClient(cfg config.Config) *ChatClient {
+	return &ChatClient{
+		Cfg:    cfg,
+		logger: *slog.Default().With("Component", "ChatClient"),
+	}
+}
+
+func (cl ChatClient) Models() ([]string, error) {
+	resp, err := http.Get(cl.Cfg.Api.Url + MODELS_API)
 	if err != nil {
-		client.Logger.Error("There was an error during the network request", "error", err.Error())
+		cl.logger.Error("There was an error during the network request", "error", err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		client.Logger.Error("There was an error reading the response body", "error", err.Error())
+		cl.logger.Error("There was an error reading the response body", "error", err.Error())
 		return nil, err
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		client.Logger.Error("Call returned non 200 status",
+		cl.logger.Error("Call returned non 200 status",
 			"statusCode", resp.StatusCode,
 			"status", resp.Status)
 		return nil,
@@ -75,18 +82,18 @@ func (client LLMClient) Models() ([]string, error) {
 				strconv.Itoa(resp.StatusCode) +
 				resp.Status)
 	}
-	client.Logger.Debug("Received data", "data", data)
+	cl.logger.Debug("Received data", "data", data)
 
-	var response struct{
-		Data []struct{
+	var response struct {
+		Data []struct {
 			Id string
 		}
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		client.Logger.Error("There was an error parsing the response", "error", err.Error())
+		cl.logger.Error("There was an error parsing the response", "error", err.Error())
 		return nil, err
 	}
-	client.Logger.Debug("Unmarshal response", "data", response)
+	cl.logger.Debug("Unmarshal response", "data", response)
 	var ret []string
 	for _, m := range response.Data {
 		ret = append(ret, m.Id)
@@ -94,43 +101,46 @@ func (client LLMClient) Models() ([]string, error) {
 	return ret, nil
 }
 
-func (client LLMClient) Call(query string, messages []model.Message) ([]model.Message, error) {
+func (cl ChatClient) Call(query string, messages []model.Message) ([]model.Message, error) {
 	requestBody := ChatRequest{
-		Model:    client.Cfg.Llm.Model,
+		Model:    cl.Cfg.Llm.Model,
 		Messages: messages,
 		Tools:    config.AvailableTools(),
 	}
 	serialized, err := json.Marshal(requestBody)
 	if err != nil {
+		cl.logger.Error("There was an error marshelling the request body",
+			"request", requestBody,
+			"error", err)
 		return []model.Message{}, err
 	}
 
 	body := bytes.NewBuffer(serialized)
-	req, err := http.NewRequest("POST", client.Cfg.Api.Url + COMPLETIONS_API, body)
+	req, err := http.NewRequest("POST", cl.Cfg.Api.Url+COMPLETIONS_API, body)
 	if err != nil {
-		client.Logger.Error("There was an error creating the request", "error", err.Error())
+		cl.logger.Error("There was an error creating the request", "error", err.Error())
 		return []model.Message{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if client.Cfg.Api.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+client.Cfg.Api.Key)
+	if cl.Cfg.Api.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+cl.Cfg.Api.Key)
 	}
-	client.Logger.Debug("Executing llm call", "req", req)
+	cl.logger.Debug("Executing llm call", "req", req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		client.Logger.Error("There was an error during http call", "error", err.Error())
+		cl.logger.Error("There was an error during http call", "error", err.Error())
 		return []model.Message{}, err
 	}
-	client.Logger.Debug("LLM Call returned", "response", resp)
 	defer resp.Body.Close()
+	cl.logger.Debug("LLM Call returned", "response", resp)
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		client.Logger.Error("There was an error reading the response body", "error", err.Error())
+		cl.logger.Error("There was an error reading the response body", "error", err.Error())
 		return []model.Message{}, err
 	}
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		client.Logger.Error("Call returned non 200 status",
+		cl.logger.Error("Call returned non 200 status",
 			"statusCode", resp.StatusCode,
 			"status", resp.Status)
 		return []model.Message{},
@@ -139,20 +149,20 @@ func (client LLMClient) Call(query string, messages []model.Message) ([]model.Me
 				resp.Status)
 	}
 
-	client.Logger.Debug("Received data", "data", data)
+	cl.logger.Debug("Received data", "data", data)
 	var response ChatResponse
 	if err := json.Unmarshal(data, &response); err != nil {
-		client.Logger.Error("There was an error parsing the response", "error", err.Error())
+		cl.logger.Error("There was an error parsing the response", "error", err.Error())
 		return []model.Message{}, err
 	}
 
 	var result []model.Message
 	if len(response.Choices) == 0 {
-		client.Logger.Error("The call returned an empty response")
+		cl.logger.Error("The call returned an empty response")
 		return []model.Message{}, errors.New("The call returned an empty response")
 	}
 	for _, choice := range response.Choices {
-		client.Logger.Debug("Appending response message", "message", choice.Message)
+		cl.logger.Debug("Appending response message", "message", choice.Message)
 		result = append(result, choice.Message)
 	}
 

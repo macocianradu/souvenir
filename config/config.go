@@ -5,26 +5,48 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 )
 
 var ENV_PREFIX = "SOUV__"
 
 type Config struct {
-	Api     ApiConfig
-	Llm     LLMConfig
-	Logging []LogConfig
-	Db      DbConfig
+	Api       ApiConfig
+	Llm       LLMConfig
+	Logging   []LogConfig
+	Db        DbConfig
+	Embedding EmbeddingConfig
 }
 
 type DbConfig struct {
-	Url      string
-	Port     string
-	DbName   string
-	User     string
-	Password string
-	History  HistoryConfig
-	Memory   MemoryConfig
+	Url          string
+	Port         string
+	DbName       string
+	User         string
+	Password     string
+	History      HistoryConfig
+	Memory       MemoryConfig
+	ChunkSize    int
+	ChunkOverlap int
+}
+
+func (config DbConfig) ConnectionString() string {
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(config.User, config.Password),
+		Host:   net.JoinHostPort(config.Url, config.Port),
+		Path:   config.DbName,
+	}
+	return u.String()
+}
+
+type EmbeddingConfig struct {
+	Url   string
+	Key   string
+	Model string
+	Dim	  int
 }
 
 type MemoryConfig struct {
@@ -114,6 +136,13 @@ func defaultConfig() *Config {
 			Password: "",
 			DbName:   "souvenir",
 			History:  HistoryConfig{Enabled: true},
+			ChunkSize: 400,
+			ChunkOverlap: 40,
+		},
+		EmbeddingConfig{
+			Url:   "",
+			Key:   "",
+			Model: "",
 		},
 	}
 }
@@ -126,13 +155,16 @@ func overrideFromEnv(cfg *Config) {
 		{conf: &cfg.Api.Url, key: ENV_PREFIX + "api__url"},
 		{conf: &cfg.Api.Key, key: ENV_PREFIX + "api__key"},
 		{conf: &cfg.Llm.Model, key: ENV_PREFIX + "llm__model"},
+		{conf: &cfg.Embedding.Url, key: ENV_PREFIX + "embedding__url"},
+		{conf: &cfg.Embedding.Key, key: ENV_PREFIX + "embedding__key"},
+		{conf: &cfg.Embedding.Model, key: ENV_PREFIX + "embedding__model"},
 		{conf: &cfg.Db.DbName, key: ENV_PREFIX + "db__dbName"},
 		{conf: &cfg.Db.Url, key: ENV_PREFIX + "db__url"},
 		{conf: &cfg.Db.User, key: ENV_PREFIX + "db__user"},
 		{conf: &cfg.Db.Password, key: ENV_PREFIX + "db__password"},
 		{conf: &cfg.Db.Port, key: ENV_PREFIX + "db__port"},
 	}
-	for _, override := range(overrides) {
+	for _, override := range overrides {
 		val := os.Getenv(override.key)
 		if val != "" {
 			*override.conf = val
@@ -143,6 +175,12 @@ func overrideFromEnv(cfg *Config) {
 func (cfg Config) validate() error {
 	if cfg.Api.Url == "" {
 		return errors.New("No API url configured")
+	}
+	if cfg.Embedding.Model == "" {
+		return errors.New("No embedding model configured")
+	}
+	if cfg.Embedding.Url == "" {
+		return errors.New("No embedding url configured")
 	}
 	return nil
 }

@@ -1,152 +1,142 @@
 package history
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
 	"net/url"
-	"strconv"
-	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/model"
-	"github.com/gopsql/db"
 	"github.com/gopsql/pgx"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type DbClient struct {
-	Cfg    config.DbConfig
-	Logger slog.Logger
+	cfg    config.DbConfig
+	logger slog.Logger
+	pool   *pgxpool.Pool
 }
 
-func (client DbClient) Init() error {
+func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
+	logger := *slog.Default().With("Component", "History")
 	const createConversationTable = `
 	CREATE TABLE IF NOT EXISTS conversations (
-		id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		name        TEXT,
-		summary     TEXT,
-		created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		id           		UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		title 		 		TEXT,
+		title_source 		TEXT,
+		summary      		TEXT,
+		summary_through_seq int default 0
+		created_at   		TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`
 	const createMessageTable = `
-	CREATE TABLE IF 	NOT EXISTS messages (
+	CREATE TABLE IF NOT EXISTS messages (
 		id          	UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		role			TEXT NOT NULL,
 		seq             INTEGER NOT NULL,
 		content 		TEXT NOT NULL,
 		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
 		created_at  	TIMESTAMPTZ NOT NULL DEFAULT now(),
+		tsv tsvector generated always as (to_tsvector('english', content)) stored,
 		UNIQUE (conversation_id, seq)
-	)`
-	const createToolCallTable = `
-	CREATE TABLE IF	 NOT EXISTS tool_calls (
-		id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		type 		 TEXT NOT NULL,
-		functionName TEXT NOT NULL,
-		functionArgs TEXT NOT NULL,
-		message_id 	 UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-		created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
+	CREATE INDEX on messages using gin (tsv);
+	CREATE INDEX on messages (conversation_id, seq);`
+	const createMessageChunkTable = `
+	CREATE TABLE IF NOT EXISTS message_chunks (
+		id				UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+		message_id		UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+		content 		TEXT NOT NULL,
+		content_hash	TEXT NOT NULL
 	)`
 
-	if err := client.ensureDbExists(); err != nil {
-		return err
+	if err := ensureDbExists(cfg, logger); err != nil {
+		return nil, err
 	}
-	conn := pgx.MustOpen(client.connectionString())
-	defer conn.Close()
+	pool, err := pgxpool.New(ctx, cfg.ConnectionString())
+	if err != nil {
+		logger.ErrorContext(ctx, "Could not create pgxpool")
+		return nil, err
+	}
 	tables := []struct {
 		tableName string
 		script    string
 	}{
 		{"conversations", createConversationTable},
 		{"messages", createMessageTable},
-		{"tool_calls", createToolCallTable},
+		{"message_chunks", createMessageChunkTable},
 	}
 
 	for _, table := range tables {
 		var exists bool
-		if err := conn.QueryRow(`SELECT EXISTS
+		if err := pool.QueryRow(ctx, `SELECT EXISTS
 			(SELECT 1 FROM information_schema.tables
 			WHERE table_schema = 'public'
 			AND table_name =$1)`, table.tableName).Scan(&exists); err != nil {
-			client.Logger.Error("Error while checking table", "table", table.tableName, "error", err)
-			return err
+			logger.Error("Error while checking table", "table", table.tableName, "error", err)
+			return nil, err
 		}
 		if exists {
-			client.Logger.Debug("Table found", "table", table.tableName)
+			logger.Debug("Table found", "table", table.tableName)
 		} else {
-			client.Logger.Debug("Table not found. Creating", "table", table.tableName)
-			if _, err := conn.Exec(table.script); err != nil {
-				client.Logger.Error("Could not create table", "table", table.tableName, "error", err)
-				return err
+			logger.Debug("Table not found. Creating", "table", table.tableName)
+			if _, err := pool.Exec(ctx, table.script); err != nil {
+				logger.Error("Could not create table", "table", table.tableName, "error", err)
+				return nil, err
 			}
 		}
 	}
 
-	return nil
+	return &DbClient{
+		logger: logger,
+		cfg:    cfg,
+		pool:   pool,
+	}, nil
 }
 
-func (client DbClient) GetConversation(id string) (model.Conversation, error) {
-	conn := pgx.MustOpen(client.connectionString())
-	defer conn.Close()
-
-	client.Logger.Debug("Searching for conversation", "id", id)
+func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conversation, error) {
+	cl.logger.Debug("Searching for conversation", "id", id)
 	var conv model.Conversation
-	if err := conn.QueryRow("SELECT id, name, summary FROM conversations WHERE id = $1", id).Scan(&conv.Id, &conv.Name, &conv.Summary); err != nil {
-		client.Logger.Error("Could not fetch conversation", "id", id, "error", err)
+	if err := cl.pool.QueryRow(ctx, "SELECT id, name, summary FROM conversations WHERE id = $1", id).Scan(&conv.Id, &conv.Name, &conv.Summary); err != nil {
+		cl.logger.Error("Could not fetch conversation", "id", id, "error", err)
 		return conv, err
 	}
-	rows, err := conn.Query(`SELECT t.id, t.type, t.functionName, t.functionArgs, m.id, m.role, m.content, m.seq
-		FROM messages m 
-		LEFT JOIN tool_calls t
-		ON m.id = t.message_id
-		WHERE m.conversation_id = $1 ORDER BY m.seq`, id)
+	rows, err := cl.pool.Query(ctx, `SELECT id, role, content, seq
+		FROM messages
+		WHERE conversation_id = $1 ORDER BY seq`, id)
 	if err != nil {
-		client.Logger.Error("Could not fetch messages", "conversation_id", id, "error", err)
+		cl.logger.Error("Could not fetch messages", "conversation_id", id, "error", err)
 		return conv, err
 	}
 	defer rows.Close()
 	var messages []model.Message
 	for rows.Next() {
 		var (
-			tcId, tcType, tcName, tcArgs *string
-			msgId, role, content         string
-			seq                          int
+			msgId, role, content string
+			seq                  int
 		)
-		err = rows.Scan(&tcId, &tcType, &tcName, &tcArgs, &msgId, &role, &content, &seq)
+		err = rows.Scan(&msgId, &role, &content, &seq)
 		if err != nil {
-			client.Logger.Error("Could not get message", "error", err)
+			cl.logger.Error("Could not get message", "error", err)
 		}
-		if len(messages) == 0 || messages[len(messages) - 1].Id != msgId {
+		if len(messages) == 0 || messages[len(messages)-1].Id != msgId {
 			messages = append(messages, model.Message{
 				Id: msgId, Role: role, Content: content, Seq: seq,
 			})
 		}
-		if tcId != nil {
-			deref := func(s *string) string {
-				if s == nil {
-					return ""
-				}
-				return *s
-			}
-			messages[len(messages) - 1].ToolCalls = append(messages[len(messages)-1].ToolCalls, model.ToolCall{
-				Id: *tcId,
-				Type: deref(tcType),
-				FunctionName: deref(tcName),
-				FunctionArguments: deref(tcArgs),
-			})
-		}
 	}
 	conv.Messages = messages
-	client.Logger.Debug("Found conversation", "conversation", conv)
+	cl.logger.Debug("Found conversation", "conversation", conv)
 	return conv, nil
 }
 
-func (client DbClient) GetConversations() ([]model.Conversation, error) {
-	client.Logger.Debug("Fetching conversations")
-	conn := pgx.MustOpen(client.connectionString())
-	defer conn.Close()
-	rows, err := conn.Query("SELECT id, name, summary FROM conversations")
+func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, error) {
+	cl.logger.Debug("Fetching conversations")
+	rows, err := cl.pool.Query(ctx, "SELECT id, name, summary FROM conversations")
 	if err != nil {
-		client.Logger.Error("Could not fetch conversations", "error", err)
+		cl.logger.Error("Could not fetch conversations", "error", err)
 		return []model.Conversation{}, err
 	}
 	defer rows.Close()
@@ -156,37 +146,35 @@ func (client DbClient) GetConversations() ([]model.Conversation, error) {
 		rows.Scan(&conv.Id, &conv.Name, &conv.Summary)
 		conversations = append(conversations, conv)
 	}
-	client.Logger.Debug("Found conversations", "count", len(conversations))
+	cl.logger.Debug("Found conversations", "count", len(conversations))
 	return conversations, nil
 }
 
-func (client DbClient) SaveConversation(conv model.Conversation) (model.Conversation, error) {
-	client.Logger.Debug("Saving conversation", "conversation", conv)
-	conn := pgx.MustOpen(client.connectionString())
-	defer conn.Close()
+func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation) (model.Conversation, error) {
+	cl.logger.Debug("Saving conversation", "conversation", conv)
 	delta := 0
 	if conv.Id == "" {
-		if err := conn.QueryRow(`INSERT INTO conversations(name, summary) VALUES($1, $2) RETURNING id`,
+		if err := cl.pool.QueryRow(ctx, `INSERT INTO conversations(name, summary) VALUES($1, $2) RETURNING id`,
 			conv.Name,
 			conv.Summary).Scan(&conv.Id); err != nil {
-			client.Logger.Error("Could not create conversation", "name", conv.Name, "error", err)
+			cl.logger.Error("Could not create conversation", "name", conv.Name, "error", err)
 			return conv, err
 		}
 	}
-	if err := conn.QueryRow(`SELECT COALESCE(MAX(seq) + 1, 1) FROM messages WHERE conversation_id = $1`, conv.Id).Scan(&delta); err != nil {
-		client.Logger.Warn("Could not get delta", "conversation_id", conv.Id, "error", err)
+	if err := cl.pool.QueryRow(ctx, `SELECT COALESCE(MAX(seq) + 1, 1) FROM messages WHERE conversation_id = $1`, conv.Id).Scan(&delta); err != nil {
+		cl.logger.Warn("Could not get delta", "conversation_id", conv.Id, "error", err)
 		return conv, errors.New("Could not get delta")
 	}
 
-	client.Logger.Debug("Found delta.", "delta", delta, "Unsaved messages", len(conv.Messages[delta - 1:]))
+	cl.logger.Debug("Found delta.", "delta", delta, "Unsaved messages", len(conv.Messages[delta-1:]))
 
 	if delta >= len(conv.Messages) {
 		return conv, nil
 	}
-	for _, message := range conv.Messages[delta - 1:] {
-		id, err := client.saveMessage(conv.Id, message, conn)
+	for _, message := range conv.Messages[delta-1:] {
+		id, err := cl.saveMessage(ctx, conv.Id, message)
 		if err != nil {
-			client.Logger.Error("Could not save message", "message_id", message.Id, "seq", message.Seq, "error", err)
+			cl.logger.Error("Could not save message", "message_id", message.Id, "seq", message.Seq, "error", err)
 			return conv, errors.New("Could not save message")
 		}
 		message.Id = id
@@ -194,81 +182,67 @@ func (client DbClient) SaveConversation(conv model.Conversation) (model.Conversa
 	return conv, nil
 }
 
-func (client DbClient) saveMessage(conversation_id string, message model.Message, conn db.DB) (string, error) {
+func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, message model.Message) (string, error) {
 	var exists bool
 	if message.Id != "" {
-		if err := conn.QueryRow(`SELECT EXISTS
+		if err := cl.pool.QueryRow(ctx, `SELECT EXISTS
 				(SELECT 1 FROM messages
 				WHERE id = $1)`, message.Id).Scan(&exists); err != nil {
-			client.Logger.Warn("Error while scanning for message", "id", message.Id, "error", err)
+			cl.logger.Warn("Error while scanning for message", "id", message.Id, "error", err)
 			return message.Id, err
 		}
 	}
 	if exists {
-		client.Logger.Warn("Message found. Skipping", "id", message.Id)
+		cl.logger.Warn("Insertting message ", "seq", message.Seq)
+		if err := cl.pool.QueryRow(ctx, `INSERT INTO messages (seq, role, content, conversation_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+			message.Seq, message.Role, message.Content, conversation_id).Scan(&message.Id); err != nil {
+			cl.logger.Error("Could not save message", "seq", message.Seq, "error", err)
+			return message.Id, errors.New("Could not save message")
+		}
+	}
+
+	if err := cl.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM message_chunks WHERE id = $1)`,
+		message.Id).Scan(&exists); err != nil {
+		cl.logger.Warn("Error while scanning for message_chunk", "message id", message.Id, "error", err)
+		return message.Id, errors.New("Could not save message chunk")
+	}
+	if exists {
+		cl.logger.Debug("Message chunk already exists. Skipping")
 		return message.Id, nil
 	}
 
-	if err := conn.QueryRow(`INSERT INTO messages (seq, role, content, conversation_id) VALUES ($1, $2, $3, $4) RETURNING id`,
-		message.Seq, message.Role, message.Content, conversation_id).Scan(&message.Id); err != nil {
-		client.Logger.Error("Could not save message", "seq", message.Seq, "error", err)
-		return message.Id, errors.New("Could not save message")
+	if _, err := cl.pool.Exec(ctx, `INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
+		VALUES ($1, $2, $3, $4)`); err != nil {
+		cl.logger.Warn("Error while creating message chunk", "message id", message.Id, "error", err)
 	}
 
-	placeholder := 0
-	var placeholders strings.Builder
-	args := []any{}
-	const cols = 4
-	for _, call := range message.ToolCalls {
-		placeholders.WriteString("($")
-		placeholders.WriteString(strconv.Itoa(placeholder + 1))
-		placeholders.WriteString(",$")
-		placeholders.WriteString(strconv.Itoa(placeholder + 2))
-		placeholders.WriteString(",$")
-		placeholders.WriteString(strconv.Itoa(placeholder + 3))
-		placeholders.WriteString(",$")
-		placeholders.WriteString(strconv.Itoa(placeholder + 4))
-		placeholders.WriteString(")")
-		args = append(args, call.Type, call.FunctionName, call.FunctionArguments, message.Id)
-		placeholder += cols
-	}
-	if _, err := conn.Exec(`INSERT INTO tool_calls(type, functionName, functionArgs, message_id) VALUES `+placeholders.String(),
-		args...); err != nil && placeholder > 0 {
-		client.Logger.Warn("Could not insert tool_calls", "message_id", message.Id, "error", err)
-	}
 	return message.Id, nil
 }
 
-func (client DbClient) ensureDbExists() error {
+func (cl DbClient) Close() {
+	cl.pool.Close()
+}
+
+func ensureDbExists(cfg config.DbConfig, logger slog.Logger) error {
 	maintenanceUrl := &url.URL{
 		Scheme: "postgres",
-		User:   url.UserPassword(client.Cfg.User, client.Cfg.Password),
-		Host:   net.JoinHostPort(client.Cfg.Url, client.Cfg.Port),
+		User:   url.UserPassword(cfg.User, cfg.Password),
+		Host:   net.JoinHostPort(cfg.Url, cfg.Port),
 		Path:   "postgres",
 	}
 	conn := pgx.MustOpen(maintenanceUrl.String())
 	defer conn.Close()
 
 	var exists bool
-	if err := conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, client.Cfg.DbName).Scan(&exists); err != nil {
+	if err := conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DbName).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {
-		client.Logger.Debug("Database already exists", "name", client.Cfg.DbName)
+		logger.Debug("Database already exists", "name", cfg.DbName)
 		return nil
 	}
 
-	client.Logger.Info("Creating database", "name", client.Cfg.DbName)
-	_, err := conn.Exec(`CREATE DATABASE "` + client.Cfg.DbName + `"`)
+	logger.Info("Creating database", "name", cfg.DbName)
+	_, err := conn.Exec(`CREATE DATABASE "` + cfg.DbName + `"`)
 	return err
-}
-
-func (client DbClient) connectionString() string {
-	u := &url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(client.Cfg.User, client.Cfg.Password),
-		Host:   net.JoinHostPort(client.Cfg.Url, client.Cfg.Port),
-		Path:   client.Cfg.DbName,
-	}
-	return u.String()
 }

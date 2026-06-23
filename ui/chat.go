@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -34,9 +35,10 @@ type uiModel struct {
 	senderStyle  lipgloss.Style
 	agentStyle   lipgloss.Style
 	errorStyle   lipgloss.Style
-	client       llm.LLMClient
+	client       llm.ChatClient
 	errorMessage string
 	history      history.DbClient
+	ctx          context.Context
 	width        int
 	height       int
 	waiting      bool
@@ -53,7 +55,7 @@ type conversationSavedMessage struct {
 	err          error
 }
 
-func InitialModel(config config.Config, client history.DbClient) uiModel {
+func InitialModel(ctx context.Context, config config.Config, client history.DbClient) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -85,9 +87,10 @@ func InitialModel(config config.Config, client history.DbClient) uiModel {
 		senderStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 		errorStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		agentStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
-		client:       llm.LLMClient{Cfg: config, Logger: *slog.Default().With("Component", "LLM")},
+		client:       *llm.NewLLMClient(config),
 		focus:        focusChat,
 		history:      client,
+		ctx:          ctx,
 		logger:       *slog.Default().With("Component", "TUI"),
 		err:          nil,
 	}
@@ -212,7 +215,7 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = focusChat
 		case focusHistory:
 			m.logger.Debug("Received pickerChosenMsg", "history", msg.id)
-			conv, err := m.history.GetConversation(msg.id)
+			conv, err := m.history.GetConversation(m.ctx, msg.id)
 			if err != nil {
 				m.logger.Error("Could not retrieve conversation", "id", msg.id)
 			}
@@ -291,7 +294,7 @@ func (m uiModel) callAgent(input string, messages []model.Message) tea.Cmd {
 func (m uiModel) saveConversation() tea.Cmd {
 	m.logger.Debug("Saving conversation", "conversation", m.conversation)
 	return func() tea.Msg {
-		conv, err := m.history.SaveConversation(m.conversation)
+		conv, err := m.history.SaveConversation(m.ctx, m.conversation)
 		return conversationSavedMessage{conversation: conv, err: err}
 	}
 }
@@ -315,7 +318,7 @@ func (m uiModel) getModels() tea.Cmd {
 func (m uiModel) getHistory() tea.Cmd {
 	m.logger.Debug("Querying history")
 	return func() tea.Msg {
-		resp, err := m.history.GetConversations()
+		resp, err := m.history.GetConversations(m.ctx)
 		if err != nil {
 			m.logger.Error("Could not fetch history", "error", err)
 		}
