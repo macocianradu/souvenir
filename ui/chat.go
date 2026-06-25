@@ -26,23 +26,25 @@ const (
 )
 
 type uiModel struct {
-	logger       slog.Logger
-	viewport     viewport.Model
-	conversation model.Conversation
-	textarea     textarea.Model
-	focus        focusState
-	picker       picker
-	senderStyle  lipgloss.Style
-	agentStyle   lipgloss.Style
-	errorStyle   lipgloss.Style
-	client       llm.ChatClient
-	errorMessage string
-	history      history.DbClient
-	ctx          context.Context
-	width        int
-	height       int
-	waiting      bool
-	err          error
+	logger        slog.Logger
+	viewport      viewport.Model
+	conversation  model.Conversation
+	textarea      textarea.Model
+	focus         focusState
+	picker        picker
+	senderStyle   lipgloss.Style
+	agentStyle    lipgloss.Style
+	errorStyle    lipgloss.Style
+	statusStyle   lipgloss.Style
+	client        llm.ChatClient
+	statusMessage string
+	commands      commandList
+	history       history.DbClient
+	ctx           context.Context
+	width         int
+	height        int
+	waiting       bool
+	err           error
 }
 
 type agentResponseMessage struct {
@@ -53,6 +55,12 @@ type agentResponseMessage struct {
 type conversationSavedMessage struct {
 	conversation model.Conversation
 	err          error
+}
+
+type conversationRenamedMessage struct {
+	title   string
+	summary string
+	err     error
 }
 
 func InitialModel(ctx context.Context, config config.Config, client history.DbClient) uiModel {
@@ -80,7 +88,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
-	model := uiModel{
+	ui := uiModel{
 		textarea:     ta,
 		conversation: model.Conversation{},
 		viewport:     vp,
@@ -94,8 +102,10 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		logger:       *slog.Default().With("Component", "TUI"),
 		err:          nil,
 	}
-	model.picker = newPicker()
-	return model
+	ui.picker = newPicker()
+	ui.commands = newCommandList(30)
+	ui.commands.setAvailable(ui.buildCommands())
+	return ui
 }
 
 func (m uiModel) Init() tea.Cmd {
@@ -113,6 +123,10 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.picker.SetSize(msg.Width, msg.Height)
+		m.commands.list.SetSize(msg.Width*80/100, commandDropdownHeight)
+		if m.commands.open {
+			m.viewport.SetHeight(m.viewport.Height() - commandDropdownHeight)
+		}
 
 		var messages = m.renderMessages()
 
@@ -134,6 +148,10 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
+			if m.commands.open {
+				m.closeCommands()
+				return m, nil
+			}
 			if m.focus != focusChat {
 				m.focus = focusChat
 			}
@@ -144,40 +162,75 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+enter", "ctrl+j", "alt+enter":
 			m.textarea.InsertRune('\n')
 			return m, nil
-		case "enter":
-			m.clearErrorMessage()
-			input := m.textarea.Value()
-			m.textarea.SetValue("")
-			m.logger.Debug("Received enter. Creating new message", "message", input)
-			switch input {
-			case "/history":
-				m.logger.Debug("Received history call")
-				m.focus = focusHistory
-				return m, m.getHistory()
-			case "/models":
-				m.logger.Debug("Received models sequence")
-				m.focus = focusModels
-				return m, m.getModels()
-			case "/exit":
-				m.logger.Debug("Received exit sequence. Quiting")
-				fmt.Println(m.textarea.Value())
-				return m, tea.Quit
-			default:
-				m.conversation.Messages = append(m.conversation.Messages, model.Message{
-					Content: input,
-					Role:    "user",
-					Seq:     len(m.conversation.Messages) + 1,
-				})
-				var messages = m.renderMessages()
-				m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-				m.waiting = true
-				return m, tea.Batch(m.callAgent(input, m.conversation.Messages), m.saveConversation())
+		case "up", "down":
+			if m.commands.open {
+				var cmd tea.Cmd
+				m.commands.list, cmd = m.commands.list.Update(msg)
+				return m, cmd
 			}
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			return m, cmd
+		case "tab":
+			if m.commands.open {
+				if sel, ok := m.commands.selectedItem(); ok {
+					m.textarea.SetValue("/" + sel.name + " ")
+				}
+				m.closeCommands()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(msg)
+			return m, cmd
+		case "enter":
+			m.setStatusMessage("")
+			input := m.textarea.Value()
+
+			if m.commands.open {
+				if sel, ok := m.commands.selectedItem(); ok {
+					m.textarea.SetValue("")
+					m.closeCommands()
+					mm, cmd := sel.handler(m)
+					return mm, cmd
+				}
+			}
+
+			if after, ok :=strings.CutPrefix(input, "/"); ok  {
+				name := after
+				for _, c := range m.commands.available {
+					if c.name == name {
+						m.textarea.SetValue("")
+						m.closeCommands()
+						mm, cmd := c.handler(m)
+						return mm, cmd
+					}
+				}
+			}
+
+			m.textarea.SetValue("")
+			m.closeCommands()
+			m.logger.Debug("Received enter. Creating new message", "message", input)
+
+			m.conversation.Messages = append(m.conversation.Messages, model.Message{
+				Content: input,
+				Role:    "user",
+				Seq:     len(m.conversation.Messages) + 1,
+			})
+			var messages = m.renderMessages()
+			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+			m.textarea.Reset()
+			m.viewport.GotoBottom()
+			m.waiting = true
+			return m, tea.Batch(m.callAgent(input, m.conversation.Messages), m.saveConversation())
 		default:
 			var cmd tea.Cmd
 			m.textarea, cmd = m.textarea.Update(msg)
+			v := m.textarea.Value()
+			if strings.HasPrefix(v, "/") {
+				m.openCommands()
+			} else {
+				m.closeCommands()
+			}
 			return m, cmd
 		}
 
@@ -186,6 +239,18 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m, cmd
+
+	case conversationRenamedMessage:
+		m.logger.Debug("Received messageRenamedMessage")
+		m.waiting = false
+		if msg.err != nil {
+			m.logger.Error("There was an error", "error", msg.err)
+			m.setErrorMessage(msg.err.Error())
+		}
+		m.setStatusMessage("Conversation renamed to: " + msg.title)
+		m.conversation.Title = msg.title
+		m.conversation.Summary = msg.summary
+		return m, nil
 
 	case agentResponseMessage:
 		m.logger.Debug("Received agentResponseMessage")
@@ -259,10 +324,12 @@ func (m uiModel) View() tea.View {
 	}
 
 	parts := []string{m.viewport.View()}
-	if m.errorMessage != "" {
-		parts = append(parts, m.errorStyle.Render(m.errorMessage))
+	if m.statusMessage != "" {
+		parts = append(parts, m.statusMessage)
 	}
-	parts = append(parts, "model: "+m.client.Cfg.Llm.Model+"; url: "+m.client.Cfg.Api.Url)
+	if m.commands.open {
+		parts = append(parts, m.commands.view())
+	}
 	parts = append(parts, m.textarea.View())
 	ui := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -270,9 +337,12 @@ func (m uiModel) View() tea.View {
 
 	c := m.textarea.Cursor()
 	if c != nil {
-		c.Y += lipgloss.Height(m.viewport.View()) + 1
-		if m.errorMessage != "" {
+		c.Y += lipgloss.Height(m.viewport.View())
+		if m.statusMessage != "" {
 			c.Y++
+		}
+		if m.commands.open {
+			c.Y += lipgloss.Height(m.commands.view())
 		}
 		gap := m.width - lipgloss.Width(ui)
 		c.X += max(gap/2, 0)
@@ -286,7 +356,7 @@ func (m uiModel) View() tea.View {
 func (m uiModel) callAgent(input string, messages []model.Message) tea.Cmd {
 	m.logger.Debug("Calling agent", "query", input, "messages", messages)
 	return func() tea.Msg {
-		resp, err := m.client.Call(input, messages)
+		resp, err := m.client.Query(input, messages)
 		return agentResponseMessage{response: resp, err: err}
 	}
 }
@@ -296,6 +366,21 @@ func (m uiModel) saveConversation() tea.Cmd {
 	return func() tea.Msg {
 		conv, err := m.history.SaveConversation(m.ctx, m.conversation)
 		return conversationSavedMessage{conversation: conv, err: err}
+	}
+}
+
+func (m uiModel) renameConversation() tea.Cmd {
+	m.logger.Debug("Renaming conversation", "conversation", m.conversation)
+	return func() tea.Msg {
+		meta, err := m.client.Rename(m.conversation.Messages)
+		if err != nil {
+			return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
+		}
+		m.conversation.Title = meta.Title
+		m.conversation.Summary = meta.Summary
+		m.conversation, err = m.history.SaveConversation(m.ctx, m.conversation)
+
+		return conversationRenamedMessage{title: m.conversation.Title, summary: m.conversation.Summary, err: err}
 	}
 }
 
@@ -326,8 +411,8 @@ func (m uiModel) getHistory() tea.Cmd {
 		items := []modelItem{}
 		for _, conv := range resp {
 			name := conv.Id
-			if conv.Name != "" {
-				name = conv.Name
+			if conv.Title != "" {
+				name = conv.Title
 			}
 			items = append(items, modelItem{name: name, description: conv.Summary})
 		}
@@ -372,15 +457,28 @@ func (m *uiModel) renderMessages() string {
 }
 
 func (m *uiModel) setErrorMessage(message string) {
-	if m.errorMessage == "" {
-		m.viewport.SetHeight(m.viewport.Height() - 1)
-	}
-	m.errorMessage = message
+	m.statusMessage = m.errorStyle.Render(message)
 }
 
-func (m *uiModel) clearErrorMessage() {
-	if m.errorMessage != "" {
-		m.viewport.SetHeight(m.viewport.Height() + 1)
-		m.errorMessage = ""
+func (m *uiModel) setStatusMessage(message string) {
+	if message == "" {
+		m.statusMessage = m.statusStyle.Render("model: " + m.client.Cfg.Llm.Model + " url: " + m.client.Cfg.Api.Url)
+		return
+	}
+	m.statusMessage = m.statusStyle.Render(message)
+}
+
+func (m *uiModel) openCommands() {
+	if !m.commands.open {
+		m.commands.open = true
+		m.viewport.SetHeight(m.viewport.Height() - commandDropdownHeight)
+	}
+	m.commands.filter(strings.TrimPrefix(m.textarea.Value(), "/"))
+}
+
+func (m *uiModel) closeCommands() {
+	if m.commands.open {
+		m.commands.open = false
+		m.viewport.SetHeight(m.viewport.Height() + commandDropdownHeight)
 	}
 }

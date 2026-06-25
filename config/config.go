@@ -8,9 +8,10 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 )
 
-var ENV_PREFIX = "SOUV__"
+const ENV_PREFIX = "SOUV__"
 
 type Config struct {
 	Api       ApiConfig
@@ -47,6 +48,7 @@ type EmbeddingConfig struct {
 	Key       string
 	Model     string
 	Dim       int
+	Timeout   int
 	BatchSize int
 }
 
@@ -59,12 +61,14 @@ type HistoryConfig struct {
 }
 
 type ApiConfig struct {
-	Url string
-	Key string
+	Url     string
+	Key     string
+	Timeout int
 }
 
 type LLMConfig struct {
-	Model string
+	Model      string
+	TitleModel string
 }
 
 type LogConfig struct {
@@ -116,7 +120,7 @@ func getLogTarget(target string) (io.Writer, error) {
 		return os.Stdout, nil
 	case "stderr":
 		return os.Stderr, nil
-	case "discrd":
+	case "discard":
 		return io.Discard, nil
 	default:
 		return os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -126,8 +130,10 @@ func getLogTarget(target string) (io.Writer, error) {
 func defaultConfig() *Config {
 	return &Config{
 		ApiConfig{
-			Url: "",
-			Key: ""},
+			Url:     "",
+			Key:     "",
+			Timeout: 300000,
+		},
 		LLMConfig{Model: ""},
 		[]LogConfig{{Level: slog.LevelInfo.Level(), Format: "text"}},
 		DbConfig{
@@ -145,6 +151,7 @@ func defaultConfig() *Config {
 			Key:       "",
 			Model:     "",
 			BatchSize: 64,
+			Timeout:   60000,
 		},
 	}
 }
@@ -170,6 +177,22 @@ func overrideFromEnv(cfg *Config) {
 		val := os.Getenv(override.key)
 		if val != "" {
 			*override.conf = val
+		}
+	}
+	durationOverrides := []struct {
+		conf *int
+		key  string
+	}{
+		{conf: &cfg.Api.Timeout, key: ENV_PREFIX + "api__timeout"},
+		{conf: &cfg.Embedding.Timeout, key: ENV_PREFIX + "embedding__timeout"},
+	}
+	for _, override := range durationOverrides {
+		val := os.Getenv(override.key)
+		if val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err == nil {
+				*override.conf = parsed
+			}
 		}
 	}
 }

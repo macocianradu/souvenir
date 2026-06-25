@@ -2,7 +2,7 @@ package model
 
 type Conversation struct {
 	Id       string
-	Name     string
+	Title    string
 	Summary  string
 	Messages []Message
 }

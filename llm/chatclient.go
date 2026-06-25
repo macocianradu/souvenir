@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	config "git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/model"
@@ -19,6 +20,7 @@ const MODELS_API = "/v1/models"
 type ChatClient struct {
 	Cfg    config.Config
 	logger slog.Logger
+	client *http.Client
 }
 
 // Request Types
@@ -40,6 +42,11 @@ type ChatResponse struct {
 	Usage   Usage    `json:"usage"`
 }
 
+type RenameResponse struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+}
+
 type Choice struct {
 	Index        int           `json:"index"`
 	Message      model.Message `json:"message"`
@@ -56,11 +63,21 @@ func NewLLMClient(cfg config.Config) *ChatClient {
 	return &ChatClient{
 		Cfg:    cfg,
 		logger: *slog.Default().With("Component", "ChatClient"),
+		client: &http.Client{Timeout: time.Duration(cfg.Api.Timeout) * time.Millisecond},
 	}
 }
 
 func (cl ChatClient) Models() ([]string, error) {
-	resp, err := http.Get(cl.Cfg.Api.Url + MODELS_API)
+	req, err := http.NewRequest("GET", cl.Cfg.Api.Url+MODELS_API, nil)
+	if err != nil {
+		cl.logger.Error("There was an error creating the request", "error", err.Error())
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cl.Cfg.Api.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+cl.Cfg.Api.Key)
+	}
+	resp, err := cl.client.Do(req)
 	if err != nil {
 		cl.logger.Error("There was an error during the network request", "error", err.Error())
 		return nil, err
@@ -101,12 +118,42 @@ func (cl ChatClient) Models() ([]string, error) {
 	return ret, nil
 }
 
-func (cl ChatClient) Call(query string, messages []model.Message) ([]model.Message, error) {
+func (cl ChatClient) Rename(messages []model.Message) (RenameResponse, error) {
+	llm := cl.Cfg.Llm.TitleModel
+	if llm == "" {
+		llm = cl.Cfg.Llm.Model
+	}
+	request := ChatRequest{
+		Model: llm,
+		Messages: append([]model.Message{{
+			Role:    "system",
+			Content: "Reply with ONLY JSON with the form: {\"title\":<title>, \"summary\":<summary>}. Title <= 10 words. Summary 2-3 sentances.",
+		}}, messages...),
+	}
+	cl.logger.Debug("Calling rename", "request", request)
+	out, err := cl.Call(request)
+	if err != nil {
+		cl.logger.Error("Error while asking for rename", "error", err)
+		return RenameResponse{}, err
+	}
+	var meta RenameResponse
+	if err := json.Unmarshal([]byte(out[0].Content), &meta); err != nil {
+		cl.logger.Error("Could not parse the rename response", "content", out[0].Content)
+		return meta, err
+	}
+	return meta, nil
+}
+
+func (cl ChatClient) Query(query string, messages []model.Message) ([]model.Message, error) {
 	requestBody := ChatRequest{
 		Model:    cl.Cfg.Llm.Model,
 		Messages: messages,
 		Tools:    config.AvailableTools(),
 	}
+	return cl.Call(requestBody)
+}
+
+func (cl ChatClient) Call(requestBody ChatRequest) ([]model.Message, error) {
 	serialized, err := json.Marshal(requestBody)
 	if err != nil {
 		cl.logger.Error("There was an error marshelling the request body",
@@ -125,8 +172,8 @@ func (cl ChatClient) Call(query string, messages []model.Message) ([]model.Messa
 	if cl.Cfg.Api.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+cl.Cfg.Api.Key)
 	}
-	cl.logger.Debug("Executing llm call", "req", req)
-	resp, err := http.DefaultClient.Do(req)
+	cl.logger.Debug("Executing llm call")
+	resp, err := cl.client.Do(req)
 	if err != nil {
 		cl.logger.Error("There was an error during http call", "error", err.Error())
 		return []model.Message{}, err

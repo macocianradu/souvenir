@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	config "git.estatecloud.org/radumaco/souvenir/config"
 )
@@ -19,6 +20,7 @@ type Embedder struct {
 	Cfg    config.EmbeddingConfig
 	logger slog.Logger
 	id     string
+	client *http.Client
 }
 
 type EmbedRequest struct {
@@ -35,7 +37,7 @@ type EmbedResponse struct {
 }
 
 type Embedding struct {
-	Embedding []float32 `json:"embeddgin"`
+	Embedding []float32 `json:"embedding"`
 	Index     int       `json:"index"`
 	Object    string    `json:"object"`
 }
@@ -44,6 +46,7 @@ func NewEmbedder(cfg config.EmbeddingConfig) *Embedder {
 	return &Embedder{
 		Cfg:    cfg,
 		logger: *slog.Default().With("Component", "Embedder"),
+		client: &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Millisecond},
 	}
 }
 
@@ -55,7 +58,7 @@ func (e Embedder) ID() string {
 	if e.id == "" {
 		e.id = strings.Map(func(r rune) rune {
 			switch {
-			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r <= '0' && r <= '9':
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 				return r
 			default:
 				return '_'
@@ -89,7 +92,7 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 		req.Header.Set("Authorization", "Bearer "+e.Cfg.Key)
 	}
 	e.logger.Debug("Executing embedding call", "req", req)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		e.logger.Error("There was an error during http call", "error", err.Error())
 		return [][]float32{}, err

@@ -30,7 +30,7 @@ func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
 		title 		 		TEXT,
 		title_source 		TEXT,
 		summary      		TEXT,
-		summary_through_seq int default 0
+		summary_through_seq int default 0,
 		created_at   		TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`
 	const createMessageTable = `
@@ -102,7 +102,7 @@ func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
 func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conversation, error) {
 	cl.logger.Debug("Searching for conversation", "id", id)
 	var conv model.Conversation
-	if err := cl.pool.QueryRow(ctx, "SELECT id, name, summary FROM conversations WHERE id = $1", id).Scan(&conv.Id, &conv.Name, &conv.Summary); err != nil {
+	if err := cl.pool.QueryRow(ctx, "SELECT id, title, summary FROM conversations WHERE id = $1", id).Scan(&conv.Id, &conv.Title, &conv.Summary); err != nil {
 		cl.logger.Error("Could not fetch conversation", "id", id, "error", err)
 		return conv, err
 	}
@@ -137,7 +137,7 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 
 func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, error) {
 	cl.logger.Debug("Fetching conversations")
-	rows, err := cl.pool.Query(ctx, "SELECT id, name, summary FROM conversations")
+	rows, err := cl.pool.Query(ctx, "SELECT id, title, summary FROM conversations")
 	if err != nil {
 		cl.logger.Error("Could not fetch conversations", "error", err)
 		return []model.Conversation{}, err
@@ -146,7 +146,7 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 	conversations := []model.Conversation{}
 	for rows.Next() {
 		var conv model.Conversation
-		rows.Scan(&conv.Id, &conv.Name, &conv.Summary)
+		rows.Scan(&conv.Id, &conv.Title, &conv.Summary)
 		conversations = append(conversations, conv)
 	}
 	cl.logger.Debug("Found conversations", "count", len(conversations))
@@ -157,10 +157,15 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 	cl.logger.Debug("Saving conversation", "conversation", conv)
 	delta := 0
 	if conv.Id == "" {
-		if err := cl.pool.QueryRow(ctx, `INSERT INTO conversations(name, summary) VALUES($1, $2) RETURNING id`,
-			conv.Name,
+		if err := cl.pool.QueryRow(ctx, `INSERT INTO conversations(title, summary) VALUES($1, $2) RETURNING id`,
+			conv.Title,
 			conv.Summary).Scan(&conv.Id); err != nil {
-			cl.logger.Error("Could not create conversation", "name", conv.Name, "error", err)
+			cl.logger.Error("Could not create conversation", "title", conv.Title, "error", err)
+			return conv, err
+		}
+	} else {
+		if _, err := cl.pool.Exec(ctx, `UPDATE conversations SET title = $1, summary = $2 WHERE id = $3`, conv.Title, conv.Summary, conv.Id); err != nil {
+			cl.logger.Error("Could not update conversation", "id", conv.Id, "error", err)
 			return conv, err
 		}
 	}
@@ -215,7 +220,7 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 		}
 		if exists {
 			cl.logger.Debug("Message chunk already exists. Skipping")
-			return message.Id, nil
+			continue
 		}
 
 		if _, err := cl.pool.Exec(ctx, `INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
@@ -232,10 +237,13 @@ func (cl DbClient) Close() {
 }
 
 func Chunk(text string, size int, overlap int) []string {
+	if size <= overlap {
+		return []string{}
+	}
 	words := strings.Fields(text)
 	var chunks []string
 	for start := 0; start < len(words); start += size - overlap {
-		end := min(start + size, len(words))
+		end := min(start+size, len(words))
 		chunks = append(chunks, strings.Join(words[start:end], " "))
 		if end == len(words) {
 			return chunks

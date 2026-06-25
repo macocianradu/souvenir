@@ -19,7 +19,7 @@ func main() {
 		slog.Error("Config error:", "message", err.Error())
 		os.Exit(1)
 	}
-	var logger = slog.Default().With("Compoent", "Main")
+	var logger = slog.Default().With("Component", "Main")
 	logger.Debug("Config initialized")
 
 	db, err := history.Init(ctx, config.Db)
