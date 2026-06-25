@@ -36,7 +36,7 @@ func (e EmbedStore) TableName() string {
 func (e EmbedStore) GetConversationsToEmbed(ctx context.Context) ([]string, error) {
 	rows, err := e.pool.Query(ctx, fmt.Sprintf(
 		`
-		   SELECT DISTINC c.id
+		   SELECT DISTINCT c.id
 		     FROM conversations c
 		     JOIN message_chunks mc
 		       ON mc.conversation_id = c.id

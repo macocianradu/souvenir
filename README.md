@@ -1,4 +1,214 @@
 # souvenir
 
-An openAI API compatible LLM chat application with local memory and history.
-Written in GO to use as few resources as possible.
+A small, self-hosted personal AI chat application with persistent memory and
+searchable history. It talks to any OpenAI-compatible endpoint, so the same
+binary works against a local `llama.cpp` server, OpenRouter, or OpenAI.
+
+Written in Go to keep the footprint small: one static binary, with Postgres and
+`pgvector` as the only dependency. No separate vector database.
+
+## Status
+
+Pre-1.0 and under active development. The chat loop is usable day to day. The
+retrieval side, which is the whole point of the name, is still being built.
+
+## What it does
+
+### Chat
+
+Requests go to `/v1/chat/completions` on whatever backend you point it at, so
+switching providers is a config change rather than a code change. `/v1/models`
+lists what the server is offering, and you can switch between them from inside
+the app without restarting.
+
+Responses stream. The SSE reader in `llm/streamclient.go` turns `data:` lines
+into events on a channel, and the UI renders tokens as they arrive. Content and
+reasoning are separate events, so models that emit `reasoning_content` can have
+their thinking shown apart from the answer. Tool call fragments are accumulated
+by index across chunks and assembled into a complete message at the end, so the
+wire format for tool calling is handled even though nothing dispatches tools
+yet.
+
+Conversations get a title and a summary from a single cheap-model call, using a
+separate model if you configure one.
+
+### Terminal UI
+
+Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
+fuzzy matching. The commands are `/exit`, `/history`, `/models` and `/rename`.
+The history browser reopens any past conversation and picks it back up.
+
+### Storage
+
+Postgres, via `pgx`. The app creates its own database and schema on first run.
+
+Conversations and messages are stored with an ordering sequence per
+conversation, and saves are incremental: only messages past the stored maximum
+sequence get written. Every message carries a generated `tsvector` column with a
+GIN index, which gives keyword search for free and is half of the eventual
+hybrid retrieval.
+
+Messages are split into overlapping word chunks and stored with a hash of their
+content, which is what makes re-embedding idempotent.
+
+### Embeddings
+
+An OpenAI-compatible `/v1/embeddings` client with batching. Vectors go into a
+table named after the embedding model and its dimension, created on demand.
+
+Finding work to do is a single query: left join the chunks against the vector
+table on `content_hash` and take the rows that miss. New messages, edited
+messages and a switch to a different embedding model all fall out of that one
+query, and re-running it only does what is left, so it is safe to interrupt.
+
+Embedding runs on a timer in the background rather than during a turn. It picks
+up conversations that have gone quiet and have chunks without vectors, so the
+chat path never waits on it.
+
+### Configuration
+
+A JSON file, `.config.json`, with `SOUV__*` environment variables overriding any
+key. It covers the API endpoint, the chat and title models, the database
+connection, the embedding backend and chunking, and logging, which supports
+several handlers at once with their own level, format and target.
+
+## Where it stops
+
+Vectors get written, but nothing reads them back. There is no similarity query,
+no merge with the keyword index, and nothing feeding retrieved context into a
+prompt. `db/memory` is an empty package waiting for the memory store. That is
+the next piece of work.
+
+## Planned
+
+Roughly the order things are expected to land in.
+
+### Retrieval
+
+This is the hard part and the centerpiece, so it gets the most time.
+
+Search combines both signals: cosine distance over the vector table merged and
+reranked with `to_tsquery` over the text index. Keyword search catches exact
+names that embeddings paraphrase away, vectors catch restatements that share no
+words. Exact search is fine at this scale; an ANN index only starts earning its
+keep somewhere north of 100k chunks.
+
+Cross-conversation search ranks on message content rather than titles, since
+titles are generated and unreliable, and returns the matching conversation with
+a snippet. It shows up both as a search box in the UI and as a tool the model
+can call when it decides an old conversation is relevant.
+
+Context assembly keeps a growing conversation inside a token budget: the last
+few turns verbatim, a rolling summary of everything older, the most relevant
+chunks pulled from earlier in the same conversation, and relevant memories.
+Tool output is skipped or marked when indexing, because a fetched web page will
+otherwise turn up in recall for every term it happens to mention. Queries and
+documents get different prefixes where the model expects them, which is easy to
+miss and quietly costs recall.
+
+### Memory
+
+A memory table separate from history, holding curated durable facts rather than
+raw transcript. Same per-model vector tables and same hash-driven backfill as
+the message chunks.
+
+Reading, writing and searching memory become tools, so the assistant curates its
+own memory as it goes.
+
+### Tool calling
+
+A loop around the chat call: if the response contains tool calls, dispatch them
+locally, append the results, call again, with an iteration cap so it cannot spin
+forever. Tools live in a registry mapping a name to a Go function and a JSON
+schema, and return a plain string so the packages behind them never import the
+API types.
+
+Tools are exposed through the API's native tool calling. MCP would only be worth
+the transport layer if these tools needed to be reachable from other clients,
+and they do not, since they live in the same binary.
+
+### Web access
+
+Search against a SearXNG instance, then a separate fetch tool, because search
+snippets are too thin to answer from. Fetched pages go through readability
+extraction and markdown conversion and get truncated to a budget before they
+reach the model.
+
+Fetch needs an SSRF guard: http and https only, private, loopback and
+link-local ranges rejected, and the resolved address rechecked on every redirect
+hop, since redirecting into the internal network is the obvious bypass.
+
+### Calendar
+
+Reading and writing iCalendar files in a directory that `vdirsyncer` keeps in
+sync. The app never speaks CalDAV itself, which keeps calendar support down to
+parsing and writing files.
+
+### Other frontends
+
+The TUI served over SSH, with the public key identifying the user, and a small
+embedded web frontend sharing the same core. Both reachable from outside the
+home network behind a reverse proxy, with the origin locked to the proxy and
+client addresses trusted from a header only when the request actually came
+through it.
+
+### Multiple users
+
+One user identity with credentials attached to it. A local password, an OIDC
+login and an SSH key are all just credentials pointing at the same user, so
+linking two logins is linking two credentials rather than a special case.
+
+OIDC uses the authorization code flow with PKCE and full ID token validation.
+Accounts link on the issuer and subject pair, never on email, since email can be
+reassigned. Matching on a claim happens once when an unknown login first
+appears, with a uniqueness check so an ambiguous match cannot become an account
+takeover. Sessions live in Postgres so they can be revoked.
+
+Every owned row carries a user id and every access decision goes through one
+scoping helper rather than being open-coded across dozens of queries. Vector
+search needs particular care here: the user filter has to apply before the
+limit, or a nearest-neighbour query happily returns someone else's rows.
+Organizations and teams are deliberately left for later.
+
+## Configuration
+
+`.config.json` sits next to the binary. Any key can be overridden with a
+`SOUV__section__key` environment variable.
+
+```json
+{
+  "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
+  "Llm":       { "Model": "...", "TitleModel": "..." },
+  "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
+                 "User": "...", "Password": "...",
+                 "ChunkSize": 400, "ChunkOverlap": 40 },
+  "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
+                 "BatchSize": 64, "Timeout": 60000, "Interval": 60 },
+  "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
+}
+```
+
+The two model settings behave differently, which is worth knowing before you
+change one.
+
+The chat model floats. Switch it whenever you like, including at runtime with
+`/models`.
+
+The embedding model is pinned for the life of the store. Changing it does not
+migrate or destroy anything, it just starts filling a new table, because a
+384-dimension column cannot hold a 768-dimension vector. Going from one model to
+another and back does not re-embed anything. While a new table is still filling,
+keyword search keeps working, so search gets worse rather than breaking.
+
+## Running
+
+Needs Go 1.26 or newer and a reachable Postgres with the `vector` extension
+available. The database and tables are created on first run.
+
+```sh
+go run .
+```
+
+## License
+
+See [LICENSE](LICENSE).
