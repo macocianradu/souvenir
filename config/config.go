@@ -43,10 +43,11 @@ func (config DbConfig) ConnectionString() string {
 }
 
 type EmbeddingConfig struct {
-	Url   string
-	Key   string
-	Model string
-	Dim	  int
+	Url       string
+	Key       string
+	Model     string
+	Dim       int
+	BatchSize int
 }
 
 type MemoryConfig struct {
@@ -130,19 +131,20 @@ func defaultConfig() *Config {
 		LLMConfig{Model: ""},
 		[]LogConfig{{Level: slog.LevelInfo.Level(), Format: "text"}},
 		DbConfig{
-			Url:      "localhost",
-			User:     "psql",
-			Port:     "54321",
-			Password: "",
-			DbName:   "souvenir",
-			History:  HistoryConfig{Enabled: true},
-			ChunkSize: 400,
+			Url:          "localhost",
+			User:         "psql",
+			Port:         "54321",
+			Password:     "",
+			DbName:       "souvenir",
+			History:      HistoryConfig{Enabled: true},
+			ChunkSize:    400,
 			ChunkOverlap: 40,
 		},
 		EmbeddingConfig{
-			Url:   "",
-			Key:   "",
-			Model: "",
+			Url:       "",
+			Key:       "",
+			Model:     "",
+			BatchSize: 64,
 		},
 	}
 }

@@ -2,13 +2,15 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/llm"
-	"github.com/gopsql/pgx"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 )
 
 type EmbedStore struct {
@@ -16,7 +18,11 @@ type EmbedStore struct {
 	logger    slog.Logger
 	embedder  llm.Embedder
 	tableName string
-	pool	  *pgxpool.Pool
+	pool      *pgxpool.Pool
+}
+
+type Chunk struct {
+	id, content, contentHash string
 }
 
 func (e EmbedStore) TableName() string {
@@ -38,7 +44,7 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 		cfg:      cfg,
 		logger:   logger,
 		embedder: embedder,
-		pool: pool,
+		pool:     pool,
 	}
 
 	const createVectorTableTemplate = `
@@ -47,9 +53,8 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 		embedding		vector(%d),
 		content_hash	text not null
 	)`
-	conn := pgx.MustOpen(cfg.ConnectionString())
 	var exists bool
-	if err := conn.QueryRow(`SELECT EXISTS
+	if err := pool.QueryRow(ctx, `SELECT EXISTS
 			(SELECT 1 FROM information_schema.tables
 			WHERE table_schema = 'public'
 			AND table_name =$1)`, store.TableName()).Scan(&exists); err != nil {
@@ -61,7 +66,7 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 	} else {
 		logger.Debug("Table not found. Creating", "table", store.TableName())
 		script := fmt.Sprintf(createVectorTableTemplate, store.TableName(), store.embedder.Dim())
-		if _, err := conn.Exec(script); err != nil {
+		if _, err := pool.Exec(ctx, script); err != nil {
 			logger.Error("Could not create table", "table", store.TableName(), "error", err)
 			return nil, err
 		}
@@ -70,23 +75,22 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 }
 
 func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string) error {
-	rows, err := e.pool.Query(ctx, `SELECT c.id, c.content, c.content_hash
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(`SELECT c.id, c.content, c.content_hash
 		FROM message_chunks c
-		LEFT JOIN $1 v
+		LEFT JOIN %s v
 			ON v.chunk_id = c.id AND v.content_hash = c.content_hash
-		WHERE c.conversation_id = $2 and v.chunk_id IS NULL`,
-		e.TableName(), conversationId)
+		WHERE c.conversation_id = $1 and v.chunk_id IS NULL`, e.TableName()),
+		conversationId)
 
 	if err != nil {
 		e.logger.Error("Could not get message chunks", "conversation_id", conversationId, "error", err)
 		return err
 	}
 
-	var pending []struct{
-		id, content, contentHash string
-	}
+	var pending []Chunk
+
 	for rows.Next() {
-		var p struct{id, content, contentHash string}
+		var p Chunk
 		if err := rows.Scan(&p.id, &p.content, &p.contentHash); err != nil {
 			rows.Close()
 			e.logger.Error("Error reading chunk", "error", err)
@@ -101,8 +105,50 @@ func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string
 		return nil
 	}
 
-	for start := 0; start < len(pending); start += e.cfg.ChunkSize {
-		e.logger.Debug("", "a", start)
+	for start := 0; start < len(pending); start += e.embedder.Cfg.BatchSize {
+		batch := pending[start:min(start+e.embedder.Cfg.BatchSize, len(pending))]
+
+		texts := make([]string, len(batch))
+		for i, chunk := range batch {
+			texts[i] = chunk.content
+		}
+		vecs, err := e.embedder.EmbedBatch(texts)
+		if err != nil {
+			e.logger.Error("There was an error embedding batch", "conversation_id", conversationId, "error", err)
+			return err
+		}
+		if len(vecs) != len(batch) {
+			err := fmt.Sprintf("Embedder returned %d vecs for %d inputs", len(vecs), len(batch))
+			e.logger.Error(err)
+			return errors.New(err)
+		}
+		if err := e.upsert(ctx, batch, vecs); err != nil {
+			e.logger.Error("Error inserting vectors in db", "error", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (e EmbedStore) upsert(ctx context.Context, chunks []Chunk, vecs [][]float32) error {
+	query := fmt.Sprintf(`
+		INSERT INTO %s (chunk_id, embedding, content_hash)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (chunk_id) DO UPDATE
+			SET embedding = EXCLUDED.embedding,
+				content_hash = EXCLUDED.content_hash`, e.TableName())
+
+	batch := &pgx.Batch{}
+	for i, chunk := range chunks {
+		batch.Queue(query, chunk.id, pgvector.NewVector(vecs[i]), chunk.contentHash)
+	}
+	result := e.pool.SendBatch(ctx, batch)
+	defer result.Close()
+	for range chunks {
+		if _, err := result.Exec(); err != nil {
+			e.logger.Error("Error inserting chunk", "error", err)
+			return err
+		}
 	}
 	return nil
 }

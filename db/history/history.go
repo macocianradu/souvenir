@@ -2,10 +2,13 @@ package history
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net"
 	"net/url"
+	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/model"
@@ -192,8 +195,8 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 			return message.Id, err
 		}
 	}
-	if exists {
-		cl.logger.Warn("Insertting message ", "seq", message.Seq)
+	if !exists {
+		cl.logger.Debug("Insertting message ", "seq", message.Seq)
 		if err := cl.pool.QueryRow(ctx, `INSERT INTO messages (seq, role, content, conversation_id) VALUES ($1, $2, $3, $4) RETURNING id`,
 			message.Seq, message.Role, message.Content, conversation_id).Scan(&message.Id); err != nil {
 			cl.logger.Error("Could not save message", "seq", message.Seq, "error", err)
@@ -201,19 +204,24 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 		}
 	}
 
-	if err := cl.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM message_chunks WHERE id = $1)`,
-		message.Id).Scan(&exists); err != nil {
-		cl.logger.Warn("Error while scanning for message_chunk", "message id", message.Id, "error", err)
-		return message.Id, errors.New("Could not save message chunk")
-	}
-	if exists {
-		cl.logger.Debug("Message chunk already exists. Skipping")
-		return message.Id, nil
-	}
+	chunks := Chunk(message.Content, cl.cfg.ChunkSize, cl.cfg.ChunkOverlap)
+	for _, chunk := range chunks {
+		hash := sha256.Sum256([]byte(chunk))
 
-	if _, err := cl.pool.Exec(ctx, `INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
-		VALUES ($1, $2, $3, $4)`); err != nil {
-		cl.logger.Warn("Error while creating message chunk", "message id", message.Id, "error", err)
+		if err := cl.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM message_chunks WHERE message_id = $1 and content_hash = $2)`,
+			message.Id, hex.EncodeToString(hash[:])).Scan(&exists); err != nil {
+			cl.logger.Warn("Error while scanning for message_chunk", "message id", message.Id, "error", err)
+			return message.Id, errors.New("Could not save message chunk")
+		}
+		if exists {
+			cl.logger.Debug("Message chunk already exists. Skipping")
+			return message.Id, nil
+		}
+
+		if _, err := cl.pool.Exec(ctx, `INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
+			VALUES ($1, $2, $3, $4)`, conversation_id, message.Id, chunk, hex.EncodeToString(hash[:])); err != nil {
+			cl.logger.Warn("Error while creating message chunk", "message id", message.Id, "error", err)
+		}
 	}
 
 	return message.Id, nil
@@ -221,6 +229,19 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 
 func (cl DbClient) Close() {
 	cl.pool.Close()
+}
+
+func Chunk(text string, size int, overlap int) []string {
+	words := strings.Fields(text)
+	var chunks []string
+	for start := 0; start < len(words); start += size - overlap {
+		end := min(start + size, len(words))
+		chunks = append(chunks, strings.Join(words[start:end], " "))
+		if end == len(words) {
+			return chunks
+		}
+	}
+	return chunks
 }
 
 func ensureDbExists(cfg config.DbConfig, logger slog.Logger) error {
