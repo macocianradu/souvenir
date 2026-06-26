@@ -50,6 +50,7 @@ type EmbeddingConfig struct {
 	Dim       int
 	Timeout   int
 	BatchSize int
+	Interval  int
 }
 
 type MemoryConfig struct {
@@ -152,6 +153,7 @@ func defaultConfig() *Config {
 			Model:     "",
 			BatchSize: 64,
 			Timeout:   60000,
+			Interval:  60,
 		},
 	}
 }
@@ -185,6 +187,7 @@ func overrideFromEnv(cfg *Config) {
 	}{
 		{conf: &cfg.Api.Timeout, key: ENV_PREFIX + "api__timeout"},
 		{conf: &cfg.Embedding.Timeout, key: ENV_PREFIX + "embedding__timeout"},
+		{conf: &cfg.Embedding.Interval, key: ENV_PREFIX + "embedding__interval"},
 	}
 	for _, override := range durationOverrides {
 		val := os.Getenv(override.key)

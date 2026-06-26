@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,6 +33,35 @@ func (e EmbedStore) TableName() string {
 	return e.tableName
 }
 
+func (e EmbedStore) GetConversationsToEmbed(ctx context.Context) ([]string, error) {
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(
+		`
+		   SELECT DISTINC c.id
+		     FROM conversations c
+		     JOIN message_chunks mc
+		       ON mc.conversation_id = c.id
+	    LEFT JOIN %s v
+			   ON v.chunk_id = mc.id AND v.content_hash = mc.content_hash
+		    WHERE c.updated_at < now() - interval '5 hours'
+		      AND v.chunk_id is NULL;
+		`,
+		e.TableName()))
+	if err != nil {
+		e.logger.Error("Error while getting conversations to embed", "error", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		err = rows.Scan(&id)
+		if err != nil {
+			e.logger.Error("Could not get id", "error", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedder) (*EmbedStore, error) {
 	logger := *slog.Default().With("Component", "EmbedStore")
 
@@ -47,17 +77,16 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 		pool:     pool,
 	}
 
-	const createVectorTableTemplate = `
-	CREATE TABLE IF NOT EXISTS %s (
-		chunk_id		UUID PRIMARY KEY REFERENCES message_chunks(id) ON DELETE CASCADE,
-		embedding		vector(%d),
-		content_hash	text not null
-	)`
 	var exists bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS
-			(SELECT 1 FROM information_schema.tables
-			WHERE table_schema = 'public'
-			AND table_name =$1)`, store.TableName()).Scan(&exists); err != nil {
+	if err := pool.QueryRow(ctx,
+		`
+		SELECT EXISTS
+			(SELECT 1
+			   FROM information_schema.tables
+			  WHERE table_schema = 'public'
+			    AND table_name =$1)
+		`,
+		store.TableName()).Scan(&exists); err != nil {
 		logger.Error("Error while checking table", "table", store.TableName(), "error", err)
 		return nil, err
 	}
@@ -65,7 +94,7 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 		logger.Debug("Table found", "table", store.TableName())
 	} else {
 		logger.Debug("Table not found. Creating", "table", store.TableName())
-		script := fmt.Sprintf(createVectorTableTemplate, store.TableName(), store.embedder.Dim())
+		script := fmt.Sprintf(db.CreateVectorTableTemplate, store.TableName(), store.embedder.Dim())
 		if _, err := pool.Exec(ctx, script); err != nil {
 			logger.Error("Could not create table", "table", store.TableName(), "error", err)
 			return nil, err
@@ -75,11 +104,17 @@ func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedd
 }
 
 func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string) error {
-	rows, err := e.pool.Query(ctx, fmt.Sprintf(`SELECT c.id, c.content, c.content_hash
-		FROM message_chunks c
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(
+		`
+		   SELECT c.id, c.content, c.content_hash
+		     FROM message_chunks c
 		LEFT JOIN %s v
-			ON v.chunk_id = c.id AND v.content_hash = c.content_hash
-		WHERE c.conversation_id = $1 and v.chunk_id IS NULL`, e.TableName()),
+		       ON v.chunk_id = c.id 
+			  AND v.content_hash = c.content_hash
+		    WHERE c.conversation_id = $1
+			  AND v.chunk_id IS NULL
+		`,
+		e.TableName()),
 		conversationId)
 
 	if err != nil {
@@ -131,12 +166,15 @@ func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string
 }
 
 func (e EmbedStore) upsert(ctx context.Context, chunks []Chunk, vecs [][]float32) error {
-	query := fmt.Sprintf(`
+	query := fmt.Sprintf(
+		`
 		INSERT INTO %s (chunk_id, embedding, content_hash)
-		VALUES ($1, $2, $3)
+		     VALUES ($1, $2, $3)
 		ON CONFLICT (chunk_id) DO UPDATE
-			SET embedding = EXCLUDED.embedding,
-				content_hash = EXCLUDED.content_hash`, e.TableName())
+			    SET embedding = EXCLUDED.embedding,
+					content_hash = EXCLUDED.content_hash
+		`,
+		e.TableName())
 
 	batch := &pgx.Batch{}
 	for i, chunk := range chunks {
@@ -151,4 +189,8 @@ func (e EmbedStore) upsert(ctx context.Context, chunks []Chunk, vecs [][]float32
 		}
 	}
 	return nil
+}
+
+func (e EmbedStore) Close() {
+	e.pool.Close()
 }

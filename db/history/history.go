@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/model"
 	"github.com/gopsql/pgx"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,36 +25,6 @@ type DbClient struct {
 
 func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
 	logger := *slog.Default().With("Component", "History")
-	const createConversationTable = `
-	CREATE TABLE IF NOT EXISTS conversations (
-		id           		UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		title 		 		TEXT,
-		title_source 		TEXT,
-		summary      		TEXT,
-		summary_through_seq int default 0,
-		created_at   		TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`
-	const createMessageTable = `
-	CREATE TABLE IF NOT EXISTS messages (
-		id          	UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		role			TEXT NOT NULL,
-		seq             INTEGER NOT NULL,
-		content 		TEXT NOT NULL,
-		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-		created_at  	TIMESTAMPTZ NOT NULL DEFAULT now(),
-		tsv tsvector generated always as (to_tsvector('english', content)) stored,
-		UNIQUE (conversation_id, seq)
-	);
-	CREATE INDEX on messages using gin (tsv);
-	CREATE INDEX on messages (conversation_id, seq);`
-	const createMessageChunkTable = `
-	CREATE TABLE IF NOT EXISTS message_chunks (
-		id				UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-		message_id		UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-		content 		TEXT NOT NULL,
-		content_hash	TEXT NOT NULL
-	)`
 
 	if err := ensureDbExists(cfg, logger); err != nil {
 		return nil, err
@@ -67,17 +38,23 @@ func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
 		tableName string
 		script    string
 	}{
-		{"conversations", createConversationTable},
-		{"messages", createMessageTable},
-		{"message_chunks", createMessageChunkTable},
+		{"conversations", db.ConversationTableScript},
+		{"messages", db.MessageTableScript},
+		{"message_chunks", db.MessageChunkTableScript},
 	}
 
 	for _, table := range tables {
 		var exists bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS
-			(SELECT 1 FROM information_schema.tables
-			WHERE table_schema = 'public'
-			AND table_name =$1)`, table.tableName).Scan(&exists); err != nil {
+		if err := pool.QueryRow(ctx, 
+			`
+			SELECT EXISTS (
+				SELECT 1
+				  FROM information_schema.tables
+				 WHERE table_schema = 'public'
+				   AND table_name =$1
+			)
+			`,
+			table.tableName).Scan(&exists); err != nil {
 			logger.Error("Error while checking table", "table", table.tableName, "error", err)
 			return nil, err
 		}
@@ -102,13 +79,22 @@ func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
 func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conversation, error) {
 	cl.logger.Debug("Searching for conversation", "id", id)
 	var conv model.Conversation
-	if err := cl.pool.QueryRow(ctx, "SELECT id, title, summary FROM conversations WHERE id = $1", id).Scan(&conv.Id, &conv.Title, &conv.Summary); err != nil {
+	if err := cl.pool.QueryRow(ctx,
+		`
+		SELECT id, title, summary
+		  FROM conversations
+		 WHERE id = $1
+		`, id).Scan(&conv.Id, &conv.Title, &conv.Summary); err != nil {
 		cl.logger.Error("Could not fetch conversation", "id", id, "error", err)
 		return conv, err
 	}
-	rows, err := cl.pool.Query(ctx, `SELECT id, role, content, seq
-		FROM messages
-		WHERE conversation_id = $1 ORDER BY seq`, id)
+	rows, err := cl.pool.Query(ctx,
+		`
+		  SELECT id, role, content, seq
+		    FROM messages
+		   WHERE conversation_id = $1
+		ORDER BY seq
+		`, id)
 	if err != nil {
 		cl.logger.Error("Could not fetch messages", "conversation_id", id, "error", err)
 		return conv, err
@@ -137,7 +123,11 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 
 func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, error) {
 	cl.logger.Debug("Fetching conversations")
-	rows, err := cl.pool.Query(ctx, "SELECT id, title, summary FROM conversations")
+	rows, err := cl.pool.Query(ctx,
+		`
+		SELECT id, title, summary
+		  FROM conversations
+		`)
 	if err != nil {
 		cl.logger.Error("Could not fetch conversations", "error", err)
 		return []model.Conversation{}, err
@@ -157,19 +147,33 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 	cl.logger.Debug("Saving conversation", "conversation", conv)
 	delta := 0
 	if conv.Id == "" {
-		if err := cl.pool.QueryRow(ctx, `INSERT INTO conversations(title, summary) VALUES($1, $2) RETURNING id`,
-			conv.Title,
-			conv.Summary).Scan(&conv.Id); err != nil {
+		if err := cl.pool.QueryRow(ctx,
+			`
+			INSERT INTO conversations(title, summary)
+			     VALUES ($1, $2)
+			  RETURNING id
+			`,
+			conv.Title, conv.Summary).Scan(&conv.Id); err != nil {
 			cl.logger.Error("Could not create conversation", "title", conv.Title, "error", err)
 			return conv, err
 		}
 	} else {
-		if _, err := cl.pool.Exec(ctx, `UPDATE conversations SET title = $1, summary = $2 WHERE id = $3`, conv.Title, conv.Summary, conv.Id); err != nil {
+		if _, err := cl.pool.Exec(ctx,
+			`
+			UPDATE conversations
+			   SET title = $1, summary = $2
+			 WHERE id = $3`, conv.Title, conv.Summary, conv.Id); err != nil {
 			cl.logger.Error("Could not update conversation", "id", conv.Id, "error", err)
 			return conv, err
 		}
 	}
-	if err := cl.pool.QueryRow(ctx, `SELECT COALESCE(MAX(seq) + 1, 1) FROM messages WHERE conversation_id = $1`, conv.Id).Scan(&delta); err != nil {
+	if err := cl.pool.QueryRow(ctx, 
+		`
+		SELECT COALESCE(MAX(seq) + 1, 1)
+		  FROM messages
+		 WHERE conversation_id = $1
+		`,
+		conv.Id).Scan(&delta); err != nil {
 		cl.logger.Warn("Could not get delta", "conversation_id", conv.Id, "error", err)
 		return conv, errors.New("Could not get delta")
 	}
@@ -193,16 +197,27 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, message model.Message) (string, error) {
 	var exists bool
 	if message.Id != "" {
-		if err := cl.pool.QueryRow(ctx, `SELECT EXISTS
-				(SELECT 1 FROM messages
-				WHERE id = $1)`, message.Id).Scan(&exists); err != nil {
+		if err := cl.pool.QueryRow(ctx,
+			`
+			SELECT EXISTS (
+				SELECT 1
+			  	  FROM messages
+				 WHERE id = $1
+			)
+			`,
+			message.Id).Scan(&exists); err != nil {
 			cl.logger.Warn("Error while scanning for message", "id", message.Id, "error", err)
 			return message.Id, err
 		}
 	}
 	if !exists {
 		cl.logger.Debug("Insertting message ", "seq", message.Seq)
-		if err := cl.pool.QueryRow(ctx, `INSERT INTO messages (seq, role, content, conversation_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+		if err := cl.pool.QueryRow(ctx,
+			`
+			INSERT INTO messages (seq, role, content, conversation_id)
+			     VALUES ($1, $2, $3, $4)
+			  RETURNING id
+			`,
 			message.Seq, message.Role, message.Content, conversation_id).Scan(&message.Id); err != nil {
 			cl.logger.Error("Could not save message", "seq", message.Seq, "error", err)
 			return message.Id, errors.New("Could not save message")
@@ -213,7 +228,15 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 	for _, chunk := range chunks {
 		hash := sha256.Sum256([]byte(chunk))
 
-		if err := cl.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM message_chunks WHERE message_id = $1 and content_hash = $2)`,
+		if err := cl.pool.QueryRow(ctx,
+			`
+			SELECT EXISTS (
+				SELECT 1
+				  FROM message_chunks
+				 WHERE message_id = $1
+				   AND content_hash = $2
+			)
+			`,
 			message.Id, hex.EncodeToString(hash[:])).Scan(&exists); err != nil {
 			cl.logger.Warn("Error while scanning for message_chunk", "message id", message.Id, "error", err)
 			return message.Id, errors.New("Could not save message chunk")
@@ -223,8 +246,12 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 			continue
 		}
 
-		if _, err := cl.pool.Exec(ctx, `INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
-			VALUES ($1, $2, $3, $4)`, conversation_id, message.Id, chunk, hex.EncodeToString(hash[:])); err != nil {
+		if _, err := cl.pool.Exec(ctx, 
+			`
+			INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
+				 VALUES ($1, $2, $3, $4)
+			`,
+			conversation_id, message.Id, chunk, hex.EncodeToString(hash[:])); err != nil {
 			cl.logger.Warn("Error while creating message chunk", "message id", message.Id, "error", err)
 		}
 	}
