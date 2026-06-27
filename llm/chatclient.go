@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	config "git.estatecloud.org/radumaco/souvenir/config"
@@ -29,6 +30,16 @@ type ChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []model.Message `json:"messages"`
 	Tools    []config.Tool   `json:"tools,omitempty"`
+	Stream   bool            `json:"stream,omitempty"`
+	Kwargs   Kwargs          `json:"chat_template_kwargs"`
+}
+
+type Kwargs struct {
+	Thinking bool `json:"enable_thinking"`
+}
+
+type Reasoning struct {
+	Effort string `json:"effort"`
 }
 
 // Response types //
@@ -129,7 +140,12 @@ func (cl ChatClient) Rename(messages []model.Message) (RenameResponse, error) {
 			Role:    "system",
 			Content: "Reply with ONLY JSON with the form: {\"title\":<title>, \"summary\":<summary>}. Title <= 10 words. Summary 2-3 sentances.",
 		}}, messages...),
+		Kwargs: Kwargs{Thinking: false},
 	}
+	request.Messages = append(request.Messages, model.Message{
+		Role:    "user",
+		Content: "Give me a title and description for this conversation. Reply with just a json and nothing else. The format is exactly {\"title\":<title>, \"summary\":<summary>}. Add nothing. Change nothing",
+	})
 	cl.logger.Debug("Calling rename", "request", request)
 	out, err := cl.Call(request)
 	if err != nil {
@@ -137,63 +153,45 @@ func (cl ChatClient) Rename(messages []model.Message) (RenameResponse, error) {
 		return RenameResponse{}, err
 	}
 	var meta RenameResponse
-	if err := json.Unmarshal([]byte(out[0].Content), &meta); err != nil {
-		cl.logger.Error("Could not parse the rename response", "content", out[0].Content)
-		return meta, err
+	cl.logger.Debug("Received rename answer", "content", out[0].Content)
+	if idx := strings.IndexByte(out[0].Content, '{'); idx >= 0 {
+		if lidx := strings.LastIndexByte(out[0].Content, '}'); lidx <= len(out[0].Content) {
+			trimmed := out[0].Content[idx:lidx + 1]
+			cl.logger.Debug("Trimmed answer", "content", trimmed)
+			if err := json.Unmarshal([]byte(trimmed), &meta); err != nil {
+				cl.logger.Error("Could not parse the rename response", "content", out[0].Content)
+				return meta, err
+			}
+			return meta, nil
+		}
 	}
-	return meta, nil
+	cl.logger.Error("Response is not standard json", "content", out[0].Content)
+	return meta, errors.New("Response is not standard json")
 }
 
-func (cl ChatClient) Query(query string, messages []model.Message) ([]model.Message, error) {
+func (cl ChatClient) Query(messages []model.Message) ([]model.Message, error) {
 	requestBody := ChatRequest{
 		Model:    cl.Cfg.Llm.Model,
 		Messages: messages,
 		Tools:    config.AvailableTools(),
+		Stream:   true,
+		Kwargs:   Kwargs{Thinking: false},
 	}
 	return cl.Call(requestBody)
 }
 
 func (cl ChatClient) Call(requestBody ChatRequest) ([]model.Message, error) {
-	serialized, err := json.Marshal(requestBody)
-	if err != nil {
-		cl.logger.Error("There was an error marshelling the request body",
-			"request", requestBody,
-			"error", err)
-		return []model.Message{}, err
-	}
+	resp, err := cl.CallApi(requestBody)
 
-	body := bytes.NewBuffer(serialized)
-	req, err := http.NewRequest("POST", cl.Cfg.Api.Url+COMPLETIONS_API, body)
 	if err != nil {
-		cl.logger.Error("There was an error creating the request", "error", err.Error())
-		return []model.Message{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if cl.Cfg.Api.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+cl.Cfg.Api.Key)
-	}
-	cl.logger.Debug("Executing llm call")
-	resp, err := cl.client.Do(req)
-	if err != nil {
-		cl.logger.Error("There was an error during http call", "error", err.Error())
-		return []model.Message{}, err
+		cl.logger.Error("There was an error during the API call", "error", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	cl.logger.Debug("LLM Call returned", "response", resp)
-
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		cl.logger.Error("There was an error reading the response body", "error", err.Error())
-		return []model.Message{}, err
-	}
-	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		cl.logger.Error("Call returned non 200 status",
-			"statusCode", resp.StatusCode,
-			"status", resp.Status)
-		return []model.Message{},
-			errors.New("Call returned invalid status " +
-				strconv.Itoa(resp.StatusCode) +
-				resp.Status)
+		return nil, err
 	}
 
 	cl.logger.Debug("Received data", "data", data)
@@ -214,4 +212,43 @@ func (cl ChatClient) Call(requestBody ChatRequest) ([]model.Message, error) {
 	}
 
 	return result, nil
+}
+
+func (cl ChatClient) CallApi(requestBody ChatRequest) (*http.Response, error) {
+	serialized, err := json.Marshal(requestBody)
+	if err != nil {
+		cl.logger.Error("There was an error marshelling the request body",
+			"request", requestBody,
+			"error", err)
+		return nil, err
+	}
+
+	body := bytes.NewBuffer(serialized)
+	req, err := http.NewRequest("POST", cl.Cfg.Api.Url+COMPLETIONS_API, body)
+	if err != nil {
+		cl.logger.Error("There was an error creating the request", "error", err.Error())
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cl.Cfg.Api.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+cl.Cfg.Api.Key)
+	}
+	cl.logger.Debug("Executing llm call")
+	resp, err := cl.client.Do(req)
+	if err != nil {
+		cl.logger.Error("There was an error during http call", "error", err.Error())
+		return nil, err
+	}
+	cl.logger.Debug("LLM Call returned", "response", resp.Status)
+
+	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		cl.logger.Error("Call returned non 200 status",
+			"statusCode", resp.StatusCode,
+			"status", resp.Status)
+		return nil,
+			errors.New("Call returned invalid status " +
+				strconv.Itoa(resp.StatusCode) +
+				resp.Status)
+	}
+	return resp, nil
 }

@@ -34,8 +34,8 @@ type uiModel struct {
 	textarea       textarea.Model
 	focus          focusState
 	picker         picker
-	thinkingBuffer strings.Builder
-	answerBuffer   strings.Builder
+	thinkingBuffer *strings.Builder
+	answerBuffer   *strings.Builder
 	senderStyle    lipgloss.Style
 	agentStyle     lipgloss.Style
 	errorStyle     lipgloss.Style
@@ -59,6 +59,10 @@ type streamEventMessage struct {
 type streamClosedMessage struct {
 }
 
+type streamStartedMessage struct {
+	ch <-chan llm.StreamEvent
+}
+
 type conversationSavedMessage struct {
 	conversation model.Conversation
 	err          error
@@ -76,7 +80,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 	ta.SetVirtualCursor(false)
 	ta.Focus()
 
-	ta.Prompt = "｜"
+	ta.Prompt = "│ "
 	ta.CharLimit = 280
 
 	ta.SetWidth(30)
@@ -96,22 +100,24 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Monkey
+	sp.Spinner = spinner.Dot
 
 	ui := uiModel{
-		textarea:     ta,
-		conversation: model.Conversation{},
-		viewport:     vp,
-		spinner:      sp,
-		senderStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		errorStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
-		agentStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
-		client:       *llm.NewLLMClient(config),
-		focus:        focusChat,
-		history:      client,
-		ctx:          ctx,
-		logger:       *slog.Default().With("Component", "TUI"),
-		err:          nil,
+		textarea:       ta,
+		conversation:   model.Conversation{},
+		viewport:       vp,
+		spinner:        sp,
+		senderStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		errorStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		agentStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
+		thinkingBuffer: &strings.Builder{},
+		answerBuffer:   &strings.Builder{},
+		client:         *llm.NewLLMClient(config),
+		focus:          focusChat,
+		history:        client,
+		ctx:            ctx,
+		logger:         *slog.Default().With("Component", "TUI"),
+		err:            nil,
 	}
 	ui.picker = newPicker()
 	ui.commands = newCommandList(30)
@@ -125,9 +131,6 @@ func (m uiModel) Init() tea.Cmd {
 
 func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.logger.Debug("Received message", "msg", msg)
-	if m.waiting {
-		m.spinner, _ = m.spinner.Update(msg)
-	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -256,7 +259,7 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case conversationRenamedMessage:
 		m.logger.Debug("Received messageRenamedMessage")
-		m.startWait()
+		m.stopWait()
 		if msg.err != nil {
 			m.logger.Error("There was an error", "error", msg.err)
 			m.setErrorMessage(msg.err.Error())
@@ -265,6 +268,11 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.conversation.Title = msg.title
 		m.conversation.Summary = msg.summary
 		return m, nil
+
+	case streamStartedMessage:
+		m.logger.Debug("Received streamStartedMessage")
+		m.streamCh = msg.ch
+		return m, waitForEvent(m.streamCh)
 
 	case streamEventMessage:
 		m.logger.Debug("Received streamEventMessage")
@@ -286,13 +294,12 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logger.Debug("Appending response message", "message", r)
 				m.conversation.Messages = append(m.conversation.Messages, r)
 			}
-
-			var messages = m.renderMessages()
-			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
-			m.viewport.GotoBottom()
-			return m, m.saveConversation()
+			return m, func() tea.Msg { return streamClosedMessage{} }
 		}
 
+		var messages = m.renderMessages()
+		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+		m.viewport.GotoBottom()
 		return m, waitForEvent(m.streamCh)
 
 	case streamClosedMessage:
@@ -301,6 +308,10 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.answerBuffer.Reset()
 		m.thinkingBuffer.Reset()
 
+		var messages = m.renderMessages()
+		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
+		m.viewport.GotoBottom()
+
 		return m, nil
 
 	case pickerChosenMsg:
@@ -308,7 +319,6 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case focusModels:
 			m.logger.Debug("Received pickerChosenMsg", "model", msg.id)
 			m.client.Cfg.Llm.Model = msg.id
-			m.stopWait()
 			m.focus = focusChat
 		case focusHistory:
 			m.logger.Debug("Received pickerChosenMsg", "history", msg.id)
@@ -317,7 +327,6 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logger.Error("Could not retrieve conversation", "id", msg.id)
 			}
 			m.conversation = conv
-			m.stopWait()
 			m.focus = focusChat
 			var messages = m.renderMessages()
 			m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(messages))
@@ -338,6 +347,10 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.conversation = msg.conversation
 	}
+	var spinnerCmd tea.Cmd
+	if m.waiting {
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
+	}
 
 	if m.focus != focusChat {
 		picker, cmd := m.picker.Update(msg)
@@ -345,7 +358,7 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	return m, nil
+	return m, spinnerCmd
 }
 
 func (m uiModel) View() tea.View {
@@ -399,7 +412,7 @@ func (m uiModel) callAgent(messages []model.Message) tea.Cmd {
 			m.logger.Error("Error while calling stream query", "error", err)
 			return streamClosedMessage{}
 		}
-		return waitForEvent(resp)
+		return streamStartedMessage{ch: resp}
 	}
 }
 
@@ -409,7 +422,7 @@ func waitForEvent(ch <-chan llm.StreamEvent) tea.Cmd {
 		if !ok {
 			return streamClosedMessage{}
 		}
-		return streamEventMessage{ev}
+		return streamEventMessage{event: ev}
 	}
 }
 
@@ -425,6 +438,7 @@ func (m uiModel) renameConversation() tea.Cmd {
 	m.logger.Debug("Renaming conversation", "conversation", m.conversation)
 	return func() tea.Msg {
 		meta, err := m.client.Rename(m.conversation.Messages)
+		m.startWait()
 		if err != nil {
 			return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
 		}
@@ -544,7 +558,7 @@ func (m *uiModel) startWait() {
 func (m *uiModel) stopWait() {
 	if m.waiting {
 		m.waiting = false
-		m.viewport.SetHeight(m.viewport.Height() - 1)
+		m.viewport.SetHeight(m.viewport.Height() + 1)
 	}
 }
 

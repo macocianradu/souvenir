@@ -39,6 +39,6 @@ const CreateVectorTableTemplate = `
 	CREATE TABLE IF NOT EXISTS %s (
 		chunk_id		UUID PRIMARY KEY REFERENCES message_chunks(id) ON DELETE CASCADE,
 		embedding		vector(%d),
-		content_hash	text not null
+		content_hash	text not null,
 		created_at		TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`

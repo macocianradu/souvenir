@@ -161,7 +161,7 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 		if _, err := cl.pool.Exec(ctx,
 			`
 			UPDATE conversations
-			   SET title = $1, summary = $2
+			   SET title = $1, summary = $2, updated_at = now()
 			 WHERE id = $3`, conv.Title, conv.Summary, conv.Id); err != nil {
 			cl.logger.Error("Could not update conversation", "id", conv.Id, "error", err)
 			return conv, err
@@ -249,9 +249,12 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 		if _, err := cl.pool.Exec(ctx, 
 			`
 			INSERT INTO message_chunks (conversation_id, message_id, content, content_hash)
-				 VALUES ($1, $2, $3, $4)
+				 VALUES ($1, $2, $3, $4);
+			UPDATE messages
+			   SET updated_at = now()
+			 WHERE id = $5
 			`,
-			conversation_id, message.Id, chunk, hex.EncodeToString(hash[:])); err != nil {
+			conversation_id, message.Id, chunk, hex.EncodeToString(hash[:]), message.Id); err != nil {
 			cl.logger.Warn("Error while creating message chunk", "message id", message.Id, "error", err)
 		}
 	}
