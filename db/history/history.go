@@ -6,14 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
-	"net"
-	"net/url"
 	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
-	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/model"
-	"github.com/gopsql/pgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,87 +19,12 @@ type DbClient struct {
 	pool   *pgxpool.Pool
 }
 
-func Init(ctx context.Context, cfg config.DbConfig) (*DbClient, error) {
-	logger := *slog.Default().With("Component", "History")
-	const createConversationTable = `
-	CREATE TABLE IF NOT EXISTS conversations (
-		id           		UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		title 		 		TEXT,
-		title_source 		TEXT,
-		summary      		TEXT,
-		summary_through_seq int default 0,
-		created_at   		TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`
-	const createMessageTable = `
-	CREATE TABLE IF NOT EXISTS messages (
-		id          	UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		role			TEXT NOT NULL,
-		seq             INTEGER NOT NULL,
-		content 		TEXT NOT NULL,
-		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-		created_at  	TIMESTAMPTZ NOT NULL DEFAULT now(),
-		tsv tsvector generated always as (to_tsvector('english', content)) stored,
-		UNIQUE (conversation_id, seq)
-	);
-	CREATE INDEX on messages using gin (tsv);
-	CREATE INDEX on messages (conversation_id, seq);`
-	const createMessageChunkTable = `
-	CREATE TABLE IF NOT EXISTS message_chunks (
-		id				UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-		message_id		UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-		content 		TEXT NOT NULL,
-		content_hash	TEXT NOT NULL
-	)`
-
-	if err := ensureDbExists(cfg, logger); err != nil {
-		return nil, err
-	}
-	pool, err := pgxpool.New(ctx, cfg.ConnectionString())
-	if err != nil {
-		logger.ErrorContext(ctx, "Could not create pgxpool")
-		return nil, err
-	}
-	tables := []struct {
-		tableName string
-		script    string
-	}{
-		{"conversations", db.ConversationTableScript},
-		{"messages", db.MessageTableScript},
-		{"message_chunks", db.MessageChunkTableScript},
-	}
-
-	for _, table := range tables {
-		var exists bool
-		if err := pool.QueryRow(ctx, 
-			`
-			SELECT EXISTS (
-				SELECT 1
-				  FROM information_schema.tables
-				 WHERE table_schema = 'public'
-				   AND table_name =$1
-			)
-			`,
-			table.tableName).Scan(&exists); err != nil {
-			logger.Error("Error while checking table", "table", table.tableName, "error", err)
-			return nil, err
-		}
-		if exists {
-			logger.Debug("Table found", "table", table.tableName)
-		} else {
-			logger.Debug("Table not found. Creating", "table", table.tableName)
-			if _, err := pool.Exec(ctx, table.script); err != nil {
-				logger.Error("Could not create table", "table", table.tableName, "error", err)
-				return nil, err
-			}
-		}
-	}
-
+func New(pool *pgxpool.Pool, cfg config.DbConfig) *DbClient {
 	return &DbClient{
-		logger: logger,
+		logger: *slog.Default().With("Component", "History"),
 		cfg:    cfg,
 		pool:   pool,
-	}, nil
+	}
 }
 
 func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conversation, error) {
@@ -292,10 +213,6 @@ func (cl DbClient) saveMessage(ctx context.Context, conversation_id string, mess
 	return message.Id, nil
 }
 
-func (cl DbClient) Close() {
-	cl.pool.Close()
-}
-
 func Chunk(text string, size int, overlap int) []string {
 	if size <= overlap {
 		return []string{}
@@ -310,28 +227,4 @@ func Chunk(text string, size int, overlap int) []string {
 		}
 	}
 	return chunks
-}
-
-func ensureDbExists(cfg config.DbConfig, logger slog.Logger) error {
-	maintenanceUrl := &url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(cfg.User, cfg.Password),
-		Host:   net.JoinHostPort(cfg.Url, cfg.Port),
-		Path:   "postgres",
-	}
-	conn := pgx.MustOpen(maintenanceUrl.String())
-	defer conn.Close()
-
-	var exists bool
-	if err := conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DbName).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		logger.Debug("Database already exists", "name", cfg.DbName)
-		return nil
-	}
-
-	logger.Info("Creating database", "name", cfg.DbName)
-	_, err := conn.Exec(`CREATE DATABASE "` + cfg.DbName + `"`)
-	return err
 }

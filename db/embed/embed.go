@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
-	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +15,6 @@ import (
 )
 
 type EmbedStore struct {
-	cfg       config.DbConfig
 	logger    slog.Logger
 	embedder  llm.Embedder
 	tableName string
@@ -26,10 +25,9 @@ type Chunk struct {
 	id, content, contentHash string
 }
 
+// TableName is the vector table for the configured model and dimension.
+// Changing either starts a new table rather than migrating the old one.
 func (e EmbedStore) TableName() string {
-	if e.tableName == "" {
-		e.tableName = fmt.Sprintf(`message_chunks_vec_%s`, e.embedder.ID())
-	}
 	return e.tableName
 }
 
@@ -62,43 +60,21 @@ func (e EmbedStore) GetConversationsToEmbed(ctx context.Context) ([]string, erro
 	return ids, nil
 }
 
-func NewEmbedStore(ctx context.Context, cfg config.DbConfig, embedder llm.Embedder) (*EmbedStore, error) {
-	logger := *slog.Default().With("Component", "EmbedStore")
-
-	pool, err := pgxpool.New(ctx, cfg.ConnectionString())
-	if err != nil {
-		logger.ErrorContext(ctx, "Could not create pgxpool")
+func NewEmbedStore(ctx context.Context, pool *pgxpool.Pool, dbName string, embedder llm.Embedder) (*EmbedStore, error) {
+	if err := db.EnsureVectorExtension(ctx, pool, dbName); err != nil {
 		return nil, err
 	}
 	store := EmbedStore{
-		cfg:      cfg,
-		logger:   logger,
+		logger:   *slog.Default().With("Component", "EmbedStore"),
 		embedder: embedder,
 		pool:     pool,
+		tableName: fmt.Sprintf("message_chunks_vec_%s_d%d",
+			strings.ToLower(embedder.ID()), embedder.Dim()),
 	}
-
-	var exists bool
-	if err := pool.QueryRow(ctx,
-		`
-		SELECT EXISTS
-			(SELECT 1
-			   FROM information_schema.tables
-			  WHERE table_schema = 'public'
-			    AND table_name =$1)
-		`,
-		store.TableName()).Scan(&exists); err != nil {
-		logger.Error("Error while checking table", "table", store.TableName(), "error", err)
+	script := fmt.Sprintf(db.VectorTableTemplate, store.tableName, embedder.Dim())
+	if _, err := pool.Exec(ctx, script); err != nil {
+		store.logger.Error("Could not create vector table", "table", store.tableName, "error", err)
 		return nil, err
-	}
-	if exists {
-		logger.Debug("Table found", "table", store.TableName())
-	} else {
-		logger.Debug("Table not found. Creating", "table", store.TableName())
-		script := fmt.Sprintf(db.CreateVectorTableTemplate, store.TableName(), store.embedder.Dim())
-		if _, err := pool.Exec(ctx, script); err != nil {
-			logger.Error("Could not create table", "table", store.TableName(), "error", err)
-			return nil, err
-		}
 	}
 	return &store, nil
 }
@@ -189,8 +165,4 @@ func (e EmbedStore) upsert(ctx context.Context, chunks []Chunk, vecs [][]float32
 		}
 	}
 	return nil
-}
-
-func (e EmbedStore) Close() {
-	e.pool.Close()
 }

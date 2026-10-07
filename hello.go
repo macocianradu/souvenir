@@ -9,10 +9,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/db/embed"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -25,29 +27,27 @@ func main() {
 	var logger = slog.Default().With("Component", "Main")
 	logger.Debug("Config initialized")
 
-	db, err := history.Init(ctx, config.Db)
+	pool, err := db.Open(ctx, config.Db)
 	if err != nil {
 		logger.Error("Error while initializing database", "message", err)
 		os.Exit(1)
 	}
-	defer db.Close()
-	es, _ := setupEmbedding(config, logger)
-	if es != nil {
-		defer es.Close()
-	}
+	defer pool.Close()
+	historyClient := history.New(pool, config.Db)
+	setupEmbedding(config, pool, logger)
 
-	p := tea.NewProgram(ui.InitialModel(ctx, *config, *db))
+	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient))
 	if _, err := p.Run(); err != nil {
 		logger.Error("Alas, there's been an error:", "message", err)
 		os.Exit(1)
 	}
 }
 
-func setupEmbedding(cfg *config.Config, logger *slog.Logger) (*embed.EmbedStore, error) {
+func setupEmbedding(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) (*embed.EmbedStore, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	embedder := llm.NewEmbedder(cfg.Embedding)
-	embedStore, err := embed.NewEmbedStore(ctx, cfg.Db, *embedder)
+	embedStore, err := embed.NewEmbedStore(ctx, pool, cfg.Db.DbName, *embedder)
 	if err != nil {
 		logger.Error("Could not initialize embedder", "error", err)
 		return nil, err
