@@ -44,11 +44,12 @@ func (m *uiModel) requestSave() tea.Cmd {
 	}
 }
 
-func (m uiModel) renameConversation() tea.Cmd {
+func (m uiModel) renameConversation(auto bool) tea.Cmd {
 	messages := m.conversation.Messages
+	gen := m.convGen
 	return func() tea.Msg {
 		meta, err := m.client.Rename(m.ctx, messages)
-		return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
+		return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err, gen: gen, auto: auto}
 	}
 }
 

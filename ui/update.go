@@ -237,7 +237,16 @@ func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd
 	}
 	m.answerBuffer.Reset()
 	m.refreshViewport()
-	return m, m.requestSave()
+	cmd := m.requestSave()
+	if !cancelled && msg.err == nil && m.needsTitle() {
+		m.titling = true
+		cmd = tea.Batch(cmd, m.renameConversation(true))
+	}
+	return m, cmd
+}
+
+func (m uiModel) needsTitle() bool {
+	return !m.titling && m.conversation.Title == "" && m.conversation.TitleSource != model.TitleSourceUser
 }
 
 func (m uiModel) handleSaved(msg conversationSavedMessage) (tea.Model, tea.Cmd) {
@@ -261,13 +270,28 @@ func (m uiModel) handleSaved(msg conversationSavedMessage) (tea.Model, tea.Cmd) 
 }
 
 func (m uiModel) handleRenamed(msg conversationRenamedMessage) (tea.Model, tea.Cmd) {
-	m.stopWait()
-	if msg.err != nil {
-		m.logger.Error("Could not rename conversation", "error", msg.err)
-		m.setErrorMessage("Could not rename conversation: " + msg.err.Error())
+	if msg.auto {
+		m.titling = false
+	} else {
+		m.stopWait()
+	}
+	if msg.gen != m.convGen {
 		return m, nil
 	}
-	m.setStatusMessage("Conversation renamed to: " + msg.title)
+	if msg.err != nil {
+		m.logger.Error("Could not rename conversation", "auto", msg.auto, "error", msg.err)
+		if !msg.auto {
+			m.setErrorMessage("Could not rename conversation: " + msg.err.Error())
+		}
+		return m, nil
+	}
+	if msg.auto {
+		if m.conversation.TitleSource == model.TitleSourceUser {
+			return m, nil
+		}
+	} else {
+		m.setStatusMessage("Conversation renamed to: " + msg.title)
+	}
 	m.conversation.Title = msg.title
 	m.conversation.TitleSource = model.TitleSourceLLM
 	m.conversation.Summary = msg.summary
@@ -287,10 +311,16 @@ func (m *uiModel) handlePickerChosen(msg pickerChosenMsg) {
 			m.setErrorMessage("Could not open conversation: " + err.Error())
 			break
 		}
-		m.conversation = conv
-		m.thinkingBuffer.Reset()
-		m.refreshViewport()
-		m.viewport.GotoBottom()
+		m.openConversation(conv)
 	}
 	m.focus = focusChat
+}
+
+func (m *uiModel) openConversation(conv model.Conversation) {
+	m.conversation = conv
+	m.convGen++
+	m.titling = false
+	m.thinkingBuffer.Reset()
+	m.refreshViewport()
+	m.viewport.GotoBottom()
 }

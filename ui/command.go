@@ -116,10 +116,8 @@ func (m uiModel) buildCommands() []command {
 				if !m.canSwitchConversation() {
 					return m, nil
 				}
-				m.conversation = model.Conversation{}
-				m.thinkingBuffer.Reset()
+				m.openConversation(model.Conversation{})
 				m.setStatusMessage("Started a new conversation")
-				m.refreshViewport()
 				return m, nil
 			},
 		},
@@ -148,7 +146,7 @@ func (m uiModel) buildCommands() []command {
 					return m, nil
 				}
 				m.startWait()
-				return m, tea.Batch(m.renameConversation(), m.spinner.Tick)
+				return m, tea.Batch(m.renameConversation(false), m.spinner.Tick)
 			},
 		},
 	}

@@ -52,6 +52,8 @@ type uiModel struct {
 	streaming      bool
 	saving         bool
 	saveQueued     bool
+	titling        bool
+	convGen        int
 }
 
 type streamEventMessage struct {
@@ -75,6 +77,8 @@ type conversationRenamedMessage struct {
 	title   string
 	summary string
 	err     error
+	gen     int
+	auto    bool
 }
 
 func InitialModel(ctx context.Context, config config.Config, client history.DbClient) uiModel {

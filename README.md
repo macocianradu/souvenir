@@ -31,7 +31,8 @@ wire format for tool calling is handled even though nothing dispatches tools
 yet.
 
 Conversations get a title and a summary from a single cheap-model call, using a
-separate model if you configure one.
+separate model if you configure one. It runs in the background after the first
+reply, and never replaces a title set with `/rename <title>`.
 
 ### Terminal UI
 
