@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"git.estatecloud.org/radumaco/souvenir/model"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -60,7 +61,7 @@ func (inlineDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 type command struct {
 	name        string
 	description string
-	handler     func(m uiModel) (uiModel, tea.Cmd)
+	handler func(m uiModel, args string) (uiModel, tea.Cmd)
 }
 
 func (c command) FilterValue() string { return c.name }
@@ -90,7 +91,7 @@ func (m uiModel) buildCommands() []command {
 		{
 			name:        "exit",
 			description: "Quit the application",
-			handler: func(m uiModel) (uiModel, tea.Cmd) {
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
 				m.logger.Debug("Received exit sequence. Quiting")
 				return m, tea.Quit
 			},
@@ -98,16 +99,33 @@ func (m uiModel) buildCommands() []command {
 		{
 			name:        "history",
 			description: "Open conversation history",
-			handler: func(m uiModel) (uiModel, tea.Cmd) {
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
 				m.logger.Debug("Received history call")
+				if !m.canSwitchConversation() {
+					return m, nil
+				}
 				m.focus = focusHistory
 				return m, m.getHistory()
 			},
 		},
 		{
+			name:        "new",
+			description: "Start a new conversation",
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
+				m.logger.Debug("Received new conversation request")
+				if !m.canSwitchConversation() {
+					return m, nil
+				}
+				m.conversation = model.Conversation{}
+				m.setStatusMessage("Started a new conversation")
+				m.refreshViewport()
+				return m, nil
+			},
+		},
+		{
 			name:        "models",
 			description: "Choose an LLM model",
-			handler: func(m uiModel) (uiModel, tea.Cmd) {
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
 				m.logger.Debug("Received models sequence")
 				m.focus = focusModels
 				return m, m.getModels()
@@ -115,14 +133,32 @@ func (m uiModel) buildCommands() []command {
 		},
 		{
 			name:        "rename",
-			description: "Rename the current conversation",
-			handler: func(m uiModel) (uiModel, tea.Cmd) {
-				m.logger.Debug("Received rename request")
-				m.waiting = true
-				return m, m.renameConversation()
+			description: "Generate a title, or /rename <title> to set one",
+			handler: func(m uiModel, args string) (uiModel, tea.Cmd) {
+				m.logger.Debug("Received rename request", "title", args)
+				if args != "" {
+					m.conversation.Title = args
+					m.conversation.TitleSource = model.TitleSourceUser
+					m.setStatusMessage("Conversation renamed to: " + args)
+					return m, m.requestSave()
+				}
+				if len(m.conversation.Messages) == 0 {
+					m.setErrorMessage("Nothing to rename yet")
+					return m, nil
+				}
+				m.startWait()
+				return m, tea.Batch(m.renameConversation(), m.spinner.Tick)
 			},
 		},
 	}
+}
+
+func (m *uiModel) canSwitchConversation() bool {
+	if m.streaming || m.saving || m.pending > 0 {
+		m.setErrorMessage("Wait for the current request to finish before switching conversations")
+		return false
+	}
+	return true
 }
 
 func (cl *commandList) setAvailable(cmds []command) {

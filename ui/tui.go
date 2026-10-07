@@ -46,8 +46,10 @@ type uiModel struct {
 	ctx            context.Context
 	width          int
 	height         int
-	waiting        bool
-	err            error
+	pending        int
+	streaming      bool
+	saving         bool
+	saveQueued     bool
 }
 
 type streamEventMessage struct {
@@ -55,6 +57,7 @@ type streamEventMessage struct {
 }
 
 type streamClosedMessage struct {
+	err error
 }
 
 type streamStartedMessage struct {
@@ -79,7 +82,6 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 	ta.Focus()
 
 	ta.Prompt = "│ "
-	ta.CharLimit = 280
 
 	ta.SetWidth(30)
 	ta.SetHeight(3)
@@ -115,7 +117,6 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		history:        client,
 		ctx:            ctx,
 		logger:         *slog.Default().With("Component", "TUI"),
-		err:            nil,
 	}
 	ui.picker = newPicker()
 	ui.commands = newCommandList(30)

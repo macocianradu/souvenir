@@ -12,7 +12,7 @@ func (m uiModel) callAgent(messages []model.Message) tea.Cmd {
 		resp, err := m.client.QueryStream(messages)
 		if err != nil {
 			m.logger.Error("Error while calling stream query", "error", err)
-			return streamClosedMessage{}
+			return streamClosedMessage{err: err}
 		}
 		return streamStartedMessage{ch: resp}
 	}
@@ -28,26 +28,25 @@ func waitForEvent(ch <-chan llm.StreamEvent) tea.Cmd {
 	}
 }
 
-func (m uiModel) saveConversation() tea.Cmd {
-	m.logger.Debug("Saving conversation", "conversation", m.conversation)
+func (m *uiModel) requestSave() tea.Cmd {
+	if m.saving {
+		m.saveQueued = true
+		return nil
+	}
+	m.saving = true
+	conv := m.conversation
+	m.logger.Debug("Saving conversation", "id", conv.Id, "messages", len(conv.Messages))
 	return func() tea.Msg {
-		conv, err := m.history.SaveConversation(m.ctx, m.conversation)
-		return conversationSavedMessage{conversation: conv, err: err}
+		saved, err := m.history.SaveConversation(m.ctx, conv)
+		return conversationSavedMessage{conversation: saved, err: err}
 	}
 }
 
 func (m uiModel) renameConversation() tea.Cmd {
-	m.logger.Debug("Renaming conversation", "conversation", m.conversation)
+	messages := m.conversation.Messages
 	return func() tea.Msg {
-		meta, err := m.client.Rename(m.conversation.Messages)
-		if err != nil {
-			return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
-		}
-		m.conversation.Title = meta.Title
-		m.conversation.Summary = meta.Summary
-		m.conversation, err = m.history.SaveConversation(m.ctx, m.conversation)
-
-		return conversationRenamedMessage{title: m.conversation.Title, summary: m.conversation.Summary, err: err}
+		meta, err := m.client.Rename(messages)
+		return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
 	}
 }
 
@@ -57,11 +56,12 @@ func (m uiModel) getModels() tea.Cmd {
 		resp, err := m.client.Models()
 		if err != nil {
 			m.logger.Error("Could not fetch models", "error", err)
+			return modelsLoadedMsg{err: err}
 		}
 		m.logger.Debug("Received models from llm", "models", resp)
 		items := []modelItem{}
 		for _, model := range resp {
-			items = append(items, modelItem{name: model, description: model})
+			items = append(items, modelItem{id: model, name: model, description: model})
 		}
 		return modelsLoadedMsg{models: items, title: "Choose a model"}
 	}
@@ -73,15 +73,16 @@ func (m uiModel) getHistory() tea.Cmd {
 		resp, err := m.history.GetConversations(m.ctx)
 		if err != nil {
 			m.logger.Error("Could not fetch history", "error", err)
+			return modelsLoadedMsg{err: err}
 		}
-		m.logger.Debug("Received conversations from psql", "conversations", resp)
+		m.logger.Debug("Received conversations from psql", "count", len(resp))
 		items := []modelItem{}
 		for _, conv := range resp {
 			name := conv.Id
 			if conv.Title != "" {
 				name = conv.Title
 			}
-			items = append(items, modelItem{name: name, description: conv.Summary})
+			items = append(items, modelItem{id: conv.Id, name: name, description: conv.Summary})
 		}
 		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off"}
 	}

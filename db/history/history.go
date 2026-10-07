@@ -34,10 +34,10 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	var conv model.Conversation
 	if err := cl.pool.QueryRow(ctx,
 		`
-		SELECT id, COALESCE(title, ''), COALESCE(summary, '')
+		SELECT id, COALESCE(title, ''), COALESCE(title_source, ''), COALESCE(summary, '')
 		  FROM conversations
 		 WHERE id = $1
-		`, id).Scan(&conv.Id, &conv.Title, &conv.Summary); err != nil {
+		`, id).Scan(&conv.Id, &conv.Title, &conv.TitleSource, &conv.Summary); err != nil {
 		cl.logger.Error("Could not fetch conversation", "id", id, "error", err)
 		return conv, err
 	}
@@ -112,11 +112,11 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 	if conv.Id == "" {
 		if err := tx.QueryRow(ctx,
 			`
-			INSERT INTO conversations (title, summary)
-			     VALUES ($1, $2)
+			INSERT INTO conversations (title, title_source, summary)
+			     VALUES ($1, NULLIF($2, ''), $3)
 			  RETURNING id
 			`,
-			conv.Title, conv.Summary).Scan(&conv.Id); err != nil {
+			conv.Title, conv.TitleSource, conv.Summary).Scan(&conv.Id); err != nil {
 			cl.logger.Error("Could not create conversation", "title", conv.Title, "error", err)
 			return conv, fmt.Errorf("create conversation: %w", err)
 		}
@@ -124,10 +124,10 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 		if _, err := tx.Exec(ctx,
 			`
 			UPDATE conversations
-			   SET title = $1, summary = $2, updated_at = now()
-			 WHERE id = $3
+			   SET title = $1, title_source = NULLIF($2, ''), summary = $3, updated_at = now()
+			 WHERE id = $4
 			`,
-			conv.Title, conv.Summary, conv.Id); err != nil {
+			conv.Title, conv.TitleSource, conv.Summary, conv.Id); err != nil {
 			cl.logger.Error("Could not update conversation", "id", conv.Id, "error", err)
 			return conv, fmt.Errorf("update conversation: %w", err)
 		}

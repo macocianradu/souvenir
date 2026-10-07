@@ -16,7 +16,7 @@ func (m uiModel) View() tea.View {
 	if m.statusMessage != "" {
 		parts = append(parts, m.statusMessage)
 	}
-	if m.waiting {
+	if m.pending > 0 {
 		parts = append(parts, m.spinner.View())
 	}
 	if m.commands.open {

@@ -16,11 +16,13 @@ type picker struct {
 type modelsLoadedMsg struct {
 	models []modelItem
 	title  string
+	err    error
 }
 type pickerChosenMsg struct{ id string }
-type pickerDismissMsg struct {}
+type pickerDismissMsg struct{}
 
 type modelItem struct {
+	id          string
 	name        string
 	description string
 }
@@ -46,7 +48,7 @@ func (p picker) Update(msg tea.Msg) (picker, tea.Cmd) {
 		p.list.Title = msg.title
 		items := make([]list.Item, len(msg.models))
 		for i, m := range msg.models {
-			items[i] = modelItem{name: m.name, description: m.description}
+			items[i] = m
 		}
 		return p, p.list.SetItems(items)
 	case tea.KeyPressMsg:
@@ -59,7 +61,7 @@ func (p picker) Update(msg tea.Msg) (picker, tea.Cmd) {
 			p.logger.Debug("Selecting model", "model", p.list.SelectedItem())
 			if it, ok := p.list.SelectedItem().(modelItem); ok {
 				p.logger.Debug("Sending modelChosenMsg")
-				return p, func() tea.Msg { return pickerChosenMsg{it.name} }
+				return p, func() tea.Msg { return pickerChosenMsg{it.id} }
 			}
 		}
 	}
