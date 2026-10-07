@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -21,16 +22,14 @@ func main() {
 	defer cancel()
 	config, err := config.Load(".config.json")
 	if err != nil {
-		slog.Error("Config error:", "message", err.Error())
-		os.Exit(1)
+		fatal("Config error", err)
 	}
 	var logger = slog.Default().With("Component", "Main")
 	logger.Debug("Config initialized")
 
 	pool, err := db.Open(ctx, config.Db)
 	if err != nil {
-		logger.Error("Error while initializing database", "message", err)
-		os.Exit(1)
+		fatal("Error while initializing database", err)
 	}
 	defer pool.Close()
 	historyClient := history.New(pool, config.Db)
@@ -38,9 +37,14 @@ func main() {
 
 	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient))
 	if _, err := p.Run(); err != nil {
-		logger.Error("Alas, there's been an error:", "message", err)
-		os.Exit(1)
+		fatal("Alas, there's been an error", err)
 	}
+}
+
+func fatal(msg string, err error) {
+	slog.Error(msg, "error", err)
+	fmt.Fprintf(os.Stderr, "%s: %v\n", msg, err)
+	os.Exit(1)
 }
 
 func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) {

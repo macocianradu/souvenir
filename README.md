@@ -22,7 +22,8 @@ lists what the server is offering, and you can switch between them from inside
 the app without restarting.
 
 Responses stream. The SSE reader in `llm/streamclient.go` turns `data:` lines
-into events on a channel, and the UI renders tokens as they arrive. Content and
+into events on a channel, and the UI renders tokens as they arrive. Esc cancels
+a reply mid-stream and keeps what has arrived so far. Content and
 reasoning are separate events, so models that emit `reasoning_content` can have
 their thinking shown apart from the answer. Tool call fragments are accumulated
 by index across chunks and assembled into a complete message at the end, so the
@@ -35,8 +36,10 @@ separate model if you configure one.
 ### Terminal UI
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
-fuzzy matching. The commands are `/exit`, `/history`, `/models` and `/rename`.
-The history browser reopens any past conversation and picks it back up.
+fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new` and
+`/rename`. The history browser reopens any past conversation and picks it back
+up. `/rename` asks the title model for a title, and `/rename <title>` sets one
+by hand.
 
 ### Storage
 
@@ -172,13 +175,20 @@ Organizations and teams are deliberately left for later.
 
 ## Configuration
 
-`.config.json` sits next to the binary. Any key can be overridden with a
-`SOUV__section__key` environment variable.
+`.config.json` is read from the working directory. Any string, number or
+boolean key can be overridden with a `SOUV__section__key` environment variable,
+nested sections included (`SOUV__db__history__enabled`); names are matched
+case-insensitively, and an unknown key is a startup error rather than silently
+ignored. `Logging` is a list and can only be set in the file.
+
+Each `Logging` entry is a handler with its own level, format (`text` or `json`)
+and target: a file path, `stdout`, `stderr` or `discard`. The TUI owns the
+terminal, so an entry without a target writes to `souvenir.log`.
 
 ```json
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
-  "Llm":       { "Model": "...", "TitleModel": "..." },
+  "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false },
   "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
                  "User": "...", "Password": "...",
                  "ChunkSize": 400, "ChunkOverlap": 40 },
@@ -188,6 +198,9 @@ Organizations and teams are deliberately left for later.
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
 ```
+
+`Llm.Thinking` sets llama.cpp's `enable_thinking` template argument. Leave it
+out for other servers: nothing server specific is sent unless it is set.
 
 `Embedding.Dim` is required and must match the model's output size.
 `Interval` is how often, in minutes, the background pass looks for work, and

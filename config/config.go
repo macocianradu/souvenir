@@ -3,12 +3,16 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
+	"strings"
 )
 
 const ENV_PREFIX = "SOUV__"
@@ -80,54 +84,66 @@ type LogConfig struct {
 	Target string
 }
 
+const defaultLogFile = "souvenir.log"
+
 func Load(path string) (*Config, error) {
 	cfg := defaultConfig()
 	if path != "" {
-		if data, err := os.ReadFile(path); err == nil {
+		data, err := os.ReadFile(path)
+		switch {
+		case err == nil:
 			if err := json.Unmarshal(data, cfg); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s: %w", path, err)
 			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return nil, err
 		}
 	}
-	overrideFromEnv(cfg)
-	configLogger(*cfg)
+	if err := overrideFromEnv(cfg); err != nil {
+		return nil, err
+	}
+	if err := configLogger(*cfg); err != nil {
+		return nil, err
+	}
 	return cfg, cfg.validate()
 }
 
-func configLogger(cfg Config) {
-	if len(cfg.Logging) < 1 {
-		opts := &slog.HandlerOptions{Level: slog.LevelInfo.Level()}
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
-		return
-	}
+// configLogger installs one handler per Logging entry. The TUI owns stdout,
+// so an entry without a Target logs to souvenir.log; an empty Logging list
+// discards everything.
+func configLogger(cfg Config) error {
 	var handlers []slog.Handler
 	for _, c := range cfg.Logging {
-		opts := &slog.HandlerOptions{Level: c.Level}
 		target, err := getLogTarget(c.Target)
 		if err != nil {
-			slog.Error("Config error. Could not open target", "target", c.Target)
+			return fmt.Errorf("Could not open log target %q: %w", c.Target, err)
 		}
+		opts := &slog.HandlerOptions{Level: c.Level}
 		switch c.Format {
-		case "text":
+		case "", "text":
 			handlers = append(handlers, slog.NewTextHandler(target, opts))
 		case "json":
 			handlers = append(handlers, slog.NewJSONHandler(target, opts))
+		default:
+			return fmt.Errorf("Unknown log format %q, expected text or json", c.Format)
 		}
 	}
 	slog.SetDefault(slog.New(slog.NewMultiHandler(handlers...)))
+	return nil
 }
 
 func getLogTarget(target string) (io.Writer, error) {
 	switch target {
-	case "", "stdout":
+	case "":
+		target = defaultLogFile
+	case "stdout":
 		return os.Stdout, nil
 	case "stderr":
 		return os.Stderr, nil
 	case "discard":
 		return io.Discard, nil
-	default:
-		return os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	}
+	return os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 }
 
 func defaultConfig() *Config {
@@ -138,7 +154,7 @@ func defaultConfig() *Config {
 			Timeout: 300000,
 		},
 		LLMConfig{Model: ""},
-		[]LogConfig{{Level: slog.LevelInfo.Level(), Format: "text"}},
+		[]LogConfig{{Level: slog.LevelInfo, Format: "text"}},
 		DbConfig{
 			Url:          "localhost",
 			User:         "psql",
@@ -161,46 +177,65 @@ func defaultConfig() *Config {
 	}
 }
 
-func overrideFromEnv(cfg *Config) {
-	overrides := []struct {
-		conf *string
-		key  string
-	}{
-		{conf: &cfg.Api.Url, key: ENV_PREFIX + "api__url"},
-		{conf: &cfg.Api.Key, key: ENV_PREFIX + "api__key"},
-		{conf: &cfg.Llm.Model, key: ENV_PREFIX + "llm__model"},
-		{conf: &cfg.Embedding.Url, key: ENV_PREFIX + "embedding__url"},
-		{conf: &cfg.Embedding.Key, key: ENV_PREFIX + "embedding__key"},
-		{conf: &cfg.Embedding.Model, key: ENV_PREFIX + "embedding__model"},
-		{conf: &cfg.Db.DbName, key: ENV_PREFIX + "db__dbName"},
-		{conf: &cfg.Db.Url, key: ENV_PREFIX + "db__url"},
-		{conf: &cfg.Db.User, key: ENV_PREFIX + "db__user"},
-		{conf: &cfg.Db.Password, key: ENV_PREFIX + "db__password"},
-		{conf: &cfg.Db.Port, key: ENV_PREFIX + "db__port"},
-	}
-	for _, override := range overrides {
-		val := os.Getenv(override.key)
-		if val != "" {
-			*override.conf = val
+func overrideFromEnv(cfg *Config) error {
+	for _, kv := range os.Environ() {
+		key, val, _ := strings.Cut(kv, "=")
+		name, ok := strings.CutPrefix(key, ENV_PREFIX)
+		if !ok || val == "" {
+			continue
+		}
+		field, err := lookupField(reflect.ValueOf(cfg).Elem(), strings.Split(name, "__"))
+		if err == nil {
+			err = setField(field, val)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
 	}
-	durationOverrides := []struct {
-		conf *int
-		key  string
-	}{
-		{conf: &cfg.Api.Timeout, key: ENV_PREFIX + "api__timeout"},
-		{conf: &cfg.Embedding.Timeout, key: ENV_PREFIX + "embedding__timeout"},
-		{conf: &cfg.Embedding.Interval, key: ENV_PREFIX + "embedding__interval"},
-	}
-	for _, override := range durationOverrides {
-		val := os.Getenv(override.key)
-		if val != "" {
-			parsed, err := strconv.Atoi(val)
-			if err == nil {
-				*override.conf = parsed
-			}
+	return nil
+}
+
+func lookupField(v reflect.Value, path []string) (reflect.Value, error) {
+	for _, name := range path {
+		if v.Kind() != reflect.Struct {
+			return reflect.Value{}, fmt.Errorf("%q is not a section", name)
+		}
+		v = v.FieldByNameFunc(func(field string) bool { return strings.EqualFold(field, name) })
+		if !v.IsValid() {
+			return reflect.Value{}, fmt.Errorf("unknown config key %q", name)
 		}
 	}
+	return v, nil
+}
+
+func setField(f reflect.Value, val string) error {
+	if f.Kind() == reflect.Pointer {
+		p := reflect.New(f.Type().Elem())
+		if err := setField(p.Elem(), val); err != nil {
+			return err
+		}
+		f.Set(p)
+		return nil
+	}
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString(val)
+	case reflect.Int:
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		f.SetInt(int64(n))
+	case reflect.Bool:
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		f.SetBool(b)
+	default:
+		return fmt.Errorf("%s cannot be set from the environment", f.Type())
+	}
+	return nil
 }
 
 func (cfg Config) validate() error {
