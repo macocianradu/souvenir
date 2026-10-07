@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,7 +69,7 @@ func (e Embedder) ID() string {
 	return e.id
 }
 
-func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
+func (e Embedder) EmbedBatch(ctx context.Context, text []string) ([][]float32, error) {
 	requestBody := EmbedRequest{
 		Model:          e.Cfg.Model,
 		Input:          text,
@@ -82,7 +83,7 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 		return [][]float32{}, err
 	}
 	body := bytes.NewBuffer(serialized)
-	req, err := http.NewRequest("POST", e.Cfg.Url+EMBEDDINGS_API, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", e.Cfg.Url+EMBEDDINGS_API, body)
 	if err != nil {
 		e.logger.Error("There was an error creating the request", "error", err.Error())
 		return [][]float32{}, err

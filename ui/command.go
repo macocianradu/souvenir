@@ -117,6 +117,7 @@ func (m uiModel) buildCommands() []command {
 					return m, nil
 				}
 				m.conversation = model.Conversation{}
+				m.thinkingBuffer.Reset()
 				m.setStatusMessage("Started a new conversation")
 				m.refreshViewport()
 				return m, nil

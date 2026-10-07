@@ -117,7 +117,7 @@ func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string
 		for i, chunk := range batch {
 			texts[i] = chunk.content
 		}
-		vecs, err := e.embedder.EmbedBatch(texts)
+		vecs, err := e.embedder.EmbedBatch(ctx, texts)
 		if err != nil {
 			e.logger.Error("There was an error embedding batch", "conversation_id", conversationId, "error", err)
 			return err

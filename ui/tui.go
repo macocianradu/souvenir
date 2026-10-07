@@ -43,6 +43,8 @@ type uiModel struct {
 	commands       commandList
 	history        history.DbClient
 	streamCh       <-chan llm.StreamEvent
+	streamCtx      context.Context
+	cancelStream   context.CancelFunc
 	ctx            context.Context
 	width          int
 	height         int

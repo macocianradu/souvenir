@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 
 	"charm.land/bubbles/v2/cursor"
@@ -21,6 +22,13 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cursor.BlinkMsg:
 		return m.updateTextarea(msg)
+
+	case tea.MouseWheelMsg:
+		if m.focus == focusChat {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
 
 	case conversationRenamedMessage:
 		return m.handleRenamed(msg)
@@ -75,10 +83,26 @@ func (m uiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		m.closeCommands()
+		if m.commands.open {
+			m.closeCommands()
+		} else if m.streaming && m.cancelStream != nil {
+			m.cancelStream()
+		}
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
+	case "pgup":
+		m.viewport.PageUp()
+		return m, nil
+	case "pgdown":
+		m.viewport.PageDown()
+		return m, nil
+	case "shift+up":
+		m.viewport.ScrollUp(1)
+		return m, nil
+	case "shift+down":
+		m.viewport.ScrollDown(1)
+		return m, nil
 	case "shift+enter", "ctrl+j", "alt+enter":
 		m.textarea.InsertRune('\n')
 		return m, nil
@@ -151,11 +175,14 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.closeCommands()
 	m.logger.Debug("Creating new message", "message", input)
 
+	m.thinkingBuffer.Reset()
 	m.appendMessage(model.Message{Content: input, Role: "user"})
 	m.refreshViewport()
+	m.viewport.GotoBottom()
 	m.streaming = true
+	m.streamCtx, m.cancelStream = context.WithCancel(m.ctx)
 	m.startWait()
-	return m, tea.Batch(m.callAgent(m.conversation.Messages), m.requestSave(), m.spinner.Tick)
+	return m, tea.Batch(m.callAgent(m.streamCtx, m.conversation.Messages), m.requestSave(), m.spinner.Tick)
 }
 
 func (m *uiModel) appendMessage(msg model.Message) {
@@ -178,6 +205,7 @@ func (m uiModel) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	m.answerBuffer.WriteString(ev.Content)
 
 	if ev.Done {
+		m.answerBuffer.Reset()
 		for _, r := range ev.Messages {
 			m.appendMessage(r)
 		}
@@ -192,17 +220,22 @@ func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd
 	if !m.streaming {
 		return m, nil
 	}
+	cancelled := m.streamCtx.Err() != nil
+	m.cancelStream()
 	m.streaming = false
 	m.streamCh = nil
+	m.streamCtx, m.cancelStream = nil, nil
 	m.stopWait()
-	if msg.err != nil {
+	switch {
+	case cancelled:
+		m.setStatusMessage("Reply cancelled")
+	case msg.err != nil:
 		m.setErrorMessage("Request failed: " + msg.err.Error())
-		if partial := m.answerBuffer.String(); partial != "" {
-			m.appendMessage(model.Message{Role: "assistant", Content: partial})
-		}
+	}
+	if partial := m.answerBuffer.String(); partial != "" {
+		m.appendMessage(model.Message{Role: "assistant", Content: partial})
 	}
 	m.answerBuffer.Reset()
-	m.thinkingBuffer.Reset()
 	m.refreshViewport()
 	return m, m.requestSave()
 }
@@ -255,7 +288,9 @@ func (m *uiModel) handlePickerChosen(msg pickerChosenMsg) {
 			break
 		}
 		m.conversation = conv
+		m.thinkingBuffer.Reset()
 		m.refreshViewport()
+		m.viewport.GotoBottom()
 	}
 	m.focus = focusChat
 }

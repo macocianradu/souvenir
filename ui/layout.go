@@ -14,7 +14,7 @@ func (m *uiModel) resize(width, height int) {
 	m.viewport.SetWidth(contentWidth)
 	m.textarea.SetWidth(contentWidth)
 	m.picker.SetSize(width, height)
-	m.commands.list.SetSize(contentWidth, commandDropdownHeight)
+	m.commands.list.SetSize(contentWidth-dropdownStyle.GetHorizontalFrameSize(), commandDropdownHeight)
 	m.layout()
 	m.logger.Debug("New sizes",
 		"vp width", m.viewport.Width(), "vp height", m.viewport.Height(),
@@ -24,12 +24,15 @@ func (m *uiModel) resize(width, height int) {
 }
 
 func (m *uiModel) refreshViewport() {
+	follow := m.viewport.AtBottom()
 	if len(m.conversation.Messages) == 0 && m.answerBuffer.Len() == 0 {
 		m.viewport.SetContent(renderLanding(m.viewport.Width(), m.viewport.Height()))
 	} else {
 		m.viewport.SetContent(lipgloss.NewStyle().Width(m.viewport.Width()).Render(m.renderMessages()))
 	}
-	m.viewport.GotoBottom()
+	if follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *uiModel) layout() {
@@ -43,7 +46,11 @@ func (m *uiModel) layout() {
 	if m.commands.open {
 		h -= lipgloss.Height(m.commands.view())
 	}
+	follow := m.viewport.AtBottom()
 	m.viewport.SetHeight(max(h, 1))
+	if follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *uiModel) startWait() {

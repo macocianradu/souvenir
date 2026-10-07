@@ -71,6 +71,7 @@ type ApiConfig struct {
 type LLMConfig struct {
 	Model      string
 	TitleModel string
+	Thinking   *bool
 }
 
 type LogConfig struct {

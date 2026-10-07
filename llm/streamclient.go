@@ -2,7 +2,9 @@ package llm
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -20,6 +22,9 @@ type StreamEvent struct {
 
 type ChatStreamResponse struct {
 	Choices []StreamChoice `json:"choices"`
+	Error   *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }
 
 type StreamChoice struct {
@@ -31,6 +36,7 @@ type StreamDelta struct {
 	Role             string          `json:"role,omitempty"`
 	Content          string          `json:"content,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	Reasoning        string          `json:"reasoning,omitempty"`
 	ToolCalls        []ToolCallDelta `json:"tool_calls,omitempty"`
 }
 
@@ -44,32 +50,44 @@ type ToolCallDelta struct {
 	} `json:"function"`
 }
 
-func (cl ChatClient) QueryStream(messages []model.Message) (<-chan StreamEvent, error) {
+func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message) (<-chan StreamEvent, error) {
 	requestBody := ChatRequest{
 		Model:    cl.Cfg.Llm.Model,
 		Messages: messages,
 		Tools:    config.AvailableTools(),
 		Stream:   true,
-		Kwargs:   Kwargs{Thinking: false},
+		Kwargs:   cl.templateKwargs(true),
 	}
-	return cl.CallStream(requestBody)
+	return cl.CallStream(ctx, requestBody)
 }
 
-func (cl ChatClient) CallStream(requestBody ChatRequest) (<-chan StreamEvent, error) {
-	resp, err := cl.CallApi(requestBody)
+// CallStream starts a streaming request. Cancelling ctx aborts the request
+// and closes the returned channel.
+func (cl ChatClient) CallStream(ctx context.Context, requestBody ChatRequest) (<-chan StreamEvent, error) {
+	resp, err := cl.CallApi(ctx, requestBody)
 	if err != nil {
-		cl.logger.Error("There was an error during the API call", "error", err)
 		return nil, err
 	}
 	events := make(chan StreamEvent)
-	go cl.readStream(resp, events)
+	go cl.readStream(ctx, resp, events)
 	return events, nil
 }
 
-func (cl ChatClient) readStream(resp *http.Response, events chan<- StreamEvent) {
-	cl.logger.Debug("Started readStrea")
+func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events chan<- StreamEvent) {
+	cl.logger.Debug("Started readStream")
 	defer resp.Body.Close()
 	defer close(events)
+
+	// send gives up once ctx is done, so the goroutine never blocks on a
+	// reader that has gone away.
+	send := func(ev StreamEvent) bool {
+		select {
+		case events <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -95,7 +113,12 @@ func (cl ChatClient) readStream(resp *http.Response, events chan<- StreamEvent) 
 		var chunk ChatStreamResponse
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			cl.logger.Error("Error parsing stream chunk", "payload", payload, "error", err)
-			events <- StreamEvent{Err: err}
+			send(StreamEvent{Err: err})
+			return
+		}
+		if chunk.Error != nil {
+			cl.logger.Error("Stream reported an error", "message", chunk.Error.Message)
+			send(StreamEvent{Err: errors.New(chunk.Error.Message)})
 			return
 		}
 
@@ -104,36 +127,41 @@ func (cl ChatClient) readStream(resp *http.Response, events chan<- StreamEvent) 
 		}
 
 		delta := chunk.Choices[0].Delta
-		if delta.ReasoningContent != "" {
-			cl.logger.Debug("Stream got reasoning content", "content", delta.ReasoningContent)
-			events <- StreamEvent{Reasoning: delta.ReasoningContent}
+		if reasoning := delta.ReasoningContent + delta.Reasoning; reasoning != "" {
+			if !send(StreamEvent{Reasoning: reasoning}) {
+				return
+			}
 		}
 		if delta.Content != "" {
-			cl.logger.Debug("Stream got content", "content", delta.Content)
 			content.WriteString(delta.Content)
-			events <- StreamEvent{Content: delta.Content}
+			if !send(StreamEvent{Content: delta.Content}) {
+				return
+			}
 		}
 
 		for _, tc := range delta.ToolCalls {
 			acc, ok := toolAcc[tc.Index]
 			if !ok {
-				acc = &model.ToolCall{}
+				acc = &model.ToolCall{Type: "function"}
 				toolAcc[tc.Index] = acc
 				order = append(order, tc.Index)
 			}
 			if tc.Id != "" {
 				acc.Id = tc.Id
 			}
-			if tc.Function.Name != "" {
-				acc.FunctionName = tc.Function.Name
+			if tc.Type != "" {
+				acc.Type = tc.Type
 			}
-			acc.FunctionArguments += tc.Function.Arguments
+			if tc.Function.Name != "" {
+				acc.Function.Name = tc.Function.Name
+			}
+			acc.Function.Arguments += tc.Function.Arguments
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		cl.logger.Error("error reading stream", "error", err)
-		events <- StreamEvent{Err: err}
+		send(StreamEvent{Err: err})
 		return
 	}
 
@@ -142,5 +170,5 @@ func (cl ChatClient) readStream(resp *http.Response, events chan<- StreamEvent) 
 		final.ToolCalls = append(final.ToolCalls, *toolAcc[idx])
 	}
 
-	events <- StreamEvent{Done: true, Messages: []model.Message{final}}
+	send(StreamEvent{Done: true, Messages: []model.Message{final}})
 }

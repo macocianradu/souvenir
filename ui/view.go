@@ -33,5 +33,6 @@ func (m uiModel) View() tea.View {
 	view := tea.NewView(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, ui))
 	view.Cursor = c
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }

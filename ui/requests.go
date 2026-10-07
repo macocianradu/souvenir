@@ -1,15 +1,17 @@
 package ui
 
 import (
+	"context"
+
 	tea "charm.land/bubbletea/v2"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
-func (m uiModel) callAgent(messages []model.Message) tea.Cmd {
-	m.logger.Debug("Calling agent", "messages", messages)
+func (m uiModel) callAgent(ctx context.Context, messages []model.Message) tea.Cmd {
+	m.logger.Debug("Calling agent", "messages", len(messages))
 	return func() tea.Msg {
-		resp, err := m.client.QueryStream(messages)
+		resp, err := m.client.QueryStream(ctx, messages)
 		if err != nil {
 			m.logger.Error("Error while calling stream query", "error", err)
 			return streamClosedMessage{err: err}
@@ -45,7 +47,7 @@ func (m *uiModel) requestSave() tea.Cmd {
 func (m uiModel) renameConversation() tea.Cmd {
 	messages := m.conversation.Messages
 	return func() tea.Msg {
-		meta, err := m.client.Rename(messages)
+		meta, err := m.client.Rename(m.ctx, messages)
 		return conversationRenamedMessage{title: meta.Title, summary: meta.Summary, err: err}
 	}
 }
@@ -53,7 +55,7 @@ func (m uiModel) renameConversation() tea.Cmd {
 func (m uiModel) getModels() tea.Cmd {
 	m.logger.Debug("Querying models")
 	return func() tea.Msg {
-		resp, err := m.client.Models()
+		resp, err := m.client.Models(m.ctx)
 		if err != nil {
 			m.logger.Error("Could not fetch models", "error", err)
 			return modelsLoadedMsg{err: err}
