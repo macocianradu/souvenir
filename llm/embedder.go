@@ -91,7 +91,7 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 	if e.Cfg.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+e.Cfg.Key)
 	}
-	e.logger.Debug("Executing embedding call", "req", req)
+	e.logger.Debug("Executing embedding call", "inputs", len(text))
 	resp, err := e.client.Do(req)
 	if err != nil {
 		e.logger.Error("There was an error during http call", "error", err.Error())
@@ -99,7 +99,6 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 	}
 	defer resp.Body.Close()
 
-	e.logger.Debug("LLM Call returned", "response", resp)
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		e.logger.Error("There was an error reading the response body", "error", err.Error())
@@ -114,7 +113,6 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 				resp.Status)
 	}
 
-	e.logger.Debug("Received data", "data", data)
 	var response EmbedResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		e.logger.Error("There was an error parsing the response", "error", err.Error())
@@ -132,8 +130,12 @@ func (e Embedder) EmbedBatch(text []string) ([][]float32, error) {
 			return nil, fmt.Errorf("Embedding index out of range. Index:%d Length:%d",
 				embed.Index, len(result))
 		}
-		e.logger.Debug("Appening embbeding", "embed", embed.Embedding)
 		result[embed.Index] = embed.Embedding
+	}
+	for i, vec := range result {
+		if vec == nil {
+			return nil, fmt.Errorf("Embedding missing for input %d of %d", i, len(result))
+		}
 	}
 
 	return result, nil

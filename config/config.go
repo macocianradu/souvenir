@@ -51,6 +51,7 @@ type EmbeddingConfig struct {
 	Timeout   int
 	BatchSize int
 	Interval  int
+	Quiet     int
 }
 
 type MemoryConfig struct {
@@ -154,6 +155,7 @@ func defaultConfig() *Config {
 			BatchSize: 64,
 			Timeout:   60000,
 			Interval:  60,
+			Quiet:     300,
 		},
 	}
 }
@@ -209,6 +211,21 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Embedding.Url == "" {
 		return errors.New("No embedding url configured")
+	}
+	if cfg.Embedding.Dim <= 0 {
+		return errors.New("Embedding.Dim must be set to the embedding model's vector size")
+	}
+	if cfg.Embedding.BatchSize <= 0 {
+		return errors.New("Embedding.BatchSize must be positive")
+	}
+	if cfg.Embedding.Interval <= 0 {
+		return errors.New("Embedding.Interval must be positive")
+	}
+	if cfg.Embedding.Quiet < 0 {
+		return errors.New("Embedding.Quiet must not be negative")
+	}
+	if cfg.Db.ChunkOverlap < 0 || cfg.Db.ChunkSize <= cfg.Db.ChunkOverlap {
+		return errors.New("Db.ChunkSize must be larger than Db.ChunkOverlap, and the overlap must not be negative")
 	}
 	return nil
 }

@@ -183,10 +183,16 @@ Organizations and teams are deliberately left for later.
                  "User": "...", "Password": "...",
                  "ChunkSize": 400, "ChunkOverlap": 40 },
   "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
-                 "BatchSize": 64, "Timeout": 60000, "Interval": 60 },
+                 "BatchSize": 64, "Timeout": 60000,
+                 "Interval": 60, "Quiet": 300 },
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
 ```
+
+`Embedding.Dim` is required and must match the model's output size.
+`Interval` is how often, in minutes, the background pass looks for work, and
+`Quiet` is how many minutes a conversation must go untouched before it is
+embedded.
 
 The two model settings behave differently, which is worth knowing before you
 change one.

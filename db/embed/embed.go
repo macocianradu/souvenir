@@ -25,37 +25,31 @@ type Chunk struct {
 	id, content, contentHash string
 }
 
-// TableName is the vector table for the configured model and dimension.
-// Changing either starts a new table rather than migrating the old one.
 func (e EmbedStore) TableName() string {
 	return e.tableName
 }
 
-func (e EmbedStore) GetConversationsToEmbed(ctx context.Context) ([]string, error) {
+func (e EmbedStore) GetConversationsToEmbed(ctx context.Context, quietMinutes int) ([]string, error) {
 	rows, err := e.pool.Query(ctx, fmt.Sprintf(
 		`
 		   SELECT DISTINCT c.id
 		     FROM conversations c
 		     JOIN message_chunks mc
 		       ON mc.conversation_id = c.id
-	    LEFT JOIN %s v
-			   ON v.chunk_id = mc.id AND v.content_hash = mc.content_hash
-		    WHERE c.updated_at < now() - interval '5 hours'
-		      AND v.chunk_id is NULL;
+		LEFT JOIN %s v
+		       ON v.chunk_id = mc.id AND v.content_hash = mc.content_hash
+		    WHERE c.updated_at < now() - make_interval(mins => $1)
+		      AND v.chunk_id IS NULL
 		`,
-		e.TableName()))
+		e.TableName()), quietMinutes)
 	if err != nil {
 		e.logger.Error("Error while getting conversations to embed", "error", err)
+		return nil, err
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		err = rows.Scan(&id)
-		if err != nil {
-			e.logger.Error("Could not get id", "error", err)
-		}
-		ids = append(ids, id)
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		e.logger.Error("Error while reading conversations to embed", "error", err)
+		return nil, err
 	}
 	return ids, nil
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -18,7 +17,8 @@ import (
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	config, err := config.Load(".config.json")
 	if err != nil {
 		slog.Error("Config error:", "message", err.Error())
@@ -34,7 +34,7 @@ func main() {
 	}
 	defer pool.Close()
 	historyClient := history.New(pool, config.Db)
-	setupEmbedding(config, pool, logger)
+	startEmbedding(ctx, config, pool, logger)
 
 	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient))
 	if _, err := p.Run(); err != nil {
@@ -43,45 +43,36 @@ func main() {
 	}
 }
 
-func setupEmbedding(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) (*embed.EmbedStore, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) {
 	embedder := llm.NewEmbedder(cfg.Embedding)
-	embedStore, err := embed.NewEmbedStore(ctx, pool, cfg.Db.DbName, *embedder)
+	store, err := embed.NewEmbedStore(ctx, pool, cfg.Db.DbName, *embedder)
 	if err != nil {
-		logger.Error("Could not initialize embedder", "error", err)
-		return nil, err
+		logger.Error("Embedding disabled", "error", err)
+		return
 	}
-	ticker := time.NewTicker(time.Duration(cfg.Embedding.Interval) * time.Minute)
 	go func() {
+		ticker := time.NewTicker(time.Duration(cfg.Embedding.Interval) * time.Minute)
 		defer ticker.Stop()
 		for {
+			runEmbedding(ctx, store, cfg.Embedding.Quiet, logger)
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runEmbedding(ctx, embedStore, logger)
 			}
 		}
 	}()
-	return embedStore, nil
 }
 
-func runEmbedding(ctx context.Context, em *embed.EmbedStore, logger *slog.Logger) error {
-	convs, err := em.GetConversationsToEmbed(ctx)
+func runEmbedding(ctx context.Context, em *embed.EmbedStore, quietMinutes int, logger *slog.Logger) {
+	convs, err := em.GetConversationsToEmbed(ctx, quietMinutes)
 	if err != nil {
 		logger.Error("Could not get conversations to embed", "error", err)
-		return err
+		return
 	}
-	var errs []error
 	for _, conv := range convs {
 		if err := em.EmbedConversation(ctx, conv); err != nil {
 			logger.Error("Could not embed conversation", "conversation_id", conv, "error", err)
-			errs = append(errs, err)
 		}
 	}
-	if errs != nil {
-		return errors.Join(errs...)
-	}
-	return nil
 }
