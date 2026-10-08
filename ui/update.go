@@ -13,8 +13,6 @@ import (
 )
 
 func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	m.logger.Debug("Received message", "msg", msg)
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)

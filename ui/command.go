@@ -61,7 +61,7 @@ func (inlineDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 type command struct {
 	name        string
 	description string
-	handler func(m uiModel, args string) (uiModel, tea.Cmd)
+	handler     func(m uiModel, args string) (uiModel, tea.Cmd)
 }
 
 func (c command) FilterValue() string { return c.name }

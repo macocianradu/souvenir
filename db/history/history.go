@@ -104,9 +104,17 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 	cl.logger.Debug("Fetching conversations")
 	rows, err := cl.pool.Query(ctx,
 		`
-		  SELECT id, COALESCE(title, ''), COALESCE(summary, '')
-		    FROM conversations
-		ORDER BY updated_at DESC
+		   SELECT c.id, COALESCE(c.title, ''), COALESCE(c.summary, ''), COALESCE(first.content, '')
+		     FROM conversations c
+		LEFT JOIN LATERAL (
+		              SELECT content
+		                FROM messages m
+		               WHERE m.conversation_id = c.id
+		            ORDER BY m.seq
+		               LIMIT 1
+		          ) first ON true
+		    WHERE COALESCE(c.title, '') <> '' OR first.content IS NOT NULL
+		 ORDER BY c.updated_at DESC
 		`)
 	if err != nil {
 		cl.logger.Error("Could not fetch conversations", "error", err)
@@ -116,7 +124,7 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 	conversations := []model.Conversation{}
 	for rows.Next() {
 		var conv model.Conversation
-		if err := rows.Scan(&conv.Id, &conv.Title, &conv.Summary); err != nil {
+		if err := rows.Scan(&conv.Id, &conv.Title, &conv.Summary, &conv.Preview); err != nil {
 			cl.logger.Error("Could not read conversation", "error", err)
 			return nil, err
 		}

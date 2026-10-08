@@ -10,6 +10,7 @@ type Conversation struct {
 	Title          string
 	TitleSource    string
 	Summary        string
+	Preview        string
 	Messages       []Message
 	ContextSummary *ContextSummary
 }

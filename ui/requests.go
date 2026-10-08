@@ -119,7 +119,7 @@ func (m uiModel) searchConversations(query string) tea.Cmd {
 		for _, hit := range hits {
 			name := hit.ConversationTitle
 			if name == "" {
-				name = hit.ConversationId
+				name = "Untitled"
 			}
 			snippet := strings.Join(strings.Fields(hit.Snippet), " ")
 			items = append(items, modelItem{id: hit.ConversationId, name: name, description: hit.Role + ": " + snippet})
@@ -139,9 +139,12 @@ func (m uiModel) getHistory() tea.Cmd {
 		m.logger.Debug("Received conversations from psql", "count", len(resp))
 		items := []modelItem{}
 		for _, conv := range resp {
-			name := conv.Id
-			if conv.Title != "" {
-				name = conv.Title
+			name := conv.Title
+			if name == "" {
+				name = truncate(conv.Preview, 60)
+			}
+			if name == "" {
+				name = "Untitled"
 			}
 			items = append(items, modelItem{id: conv.Id, name: name, description: conv.Summary})
 		}
