@@ -55,6 +55,10 @@ func (e Embedder) MaxDistance() float64 {
 	return e.Cfg.MaxDistance
 }
 
+func (e Embedder) DistanceMargin() float64 {
+	return e.Cfg.DistanceMargin
+}
+
 func (e Embedder) Dim() int {
 	return e.Cfg.Dim
 }

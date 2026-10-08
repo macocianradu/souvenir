@@ -59,10 +59,12 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 		if err != nil {
 			s.logger.Warn("Could not embed query, using keyword search only", "error", err)
 		} else {
-			args = append(args, pgvector.NewVector(vec), s.store.MaxDistance())
+			args = append(args, pgvector.NewVector(vec), s.store.MaxDistance(), s.store.DistanceMargin())
 			vectorLeg = fmt.Sprintf(`
 				SELECT message_id AS id, row_number() OVER (ORDER BY distance) AS rank
 				  FROM (
+					  SELECT message_id, distance, min(distance) OVER () AS best
+					    FROM (
 					  SELECT mc.message_id, min(v.embedding <=> $5) AS distance
 					    FROM %s v
 					    JOIN message_chunks mc
@@ -72,7 +74,9 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 					  HAVING $6::float8 = 0 OR min(v.embedding <=> $5) <= $6
 					ORDER BY distance
 					   LIMIT $3
-				  ) nearest`, s.store.TableName())
+					    ) nearest
+				  ) scored
+				 WHERE $7::float8 = 0 OR distance <= best + $7`, s.store.TableName())
 		}
 	}
 

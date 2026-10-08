@@ -49,6 +49,11 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setErrorMessage("Could not load list: " + msg.err.Error())
 			return m, nil
 		}
+		if m.focus == focusSearch && len(msg.models) == 0 {
+			m.focus = focusChat
+			m.setStatusMessage("No matches")
+			return m, nil
+		}
 
 	case pickerChosenMsg:
 		m.handlePickerChosen(msg)
@@ -303,7 +308,7 @@ func (m *uiModel) handlePickerChosen(msg pickerChosenMsg) {
 	case focusModels:
 		m.logger.Debug("Model chosen", "model", msg.id)
 		m.client.Cfg.Llm.Model = msg.id
-	case focusHistory:
+	case focusHistory, focusSearch:
 		m.logger.Debug("Conversation chosen", "history", msg.id)
 		conv, err := m.history.GetConversation(m.ctx, msg.id)
 		if err != nil {

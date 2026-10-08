@@ -37,10 +37,11 @@ reply, and never replaces a title set with `/rename <title>`.
 ### Terminal UI
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
-fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new` and
-`/rename`. The history browser reopens any past conversation and picks it back
+fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new`,
+`/rename` and `/search`. The history browser reopens any past conversation and picks it back
 up. `/rename` asks the title model for a title, and `/rename <title>` sets one
-by hand.
+by hand. `/search <text>` searches every conversation and opens the one you
+pick.
 
 ### Storage
 
@@ -80,8 +81,8 @@ several handlers at once with their own level, format and target.
 
 `db/search` runs hybrid search: cosine distance over the vector table and
 `websearch_to_tsquery` over the text index, merged with reciprocal rank fusion,
-falling back to keywords alone when embeddings are unavailable. Nothing calls it
-from the UI yet, and nothing feeds retrieved context into a prompt.
+falling back to keywords alone when embeddings are unavailable. It backs
+`/search`, but nothing feeds retrieved context into a prompt yet.
 `db/memory` is an empty package waiting for the memory store.
 
 ## Planned
@@ -196,7 +197,7 @@ terminal, so an entry without a target writes to `souvenir.log`.
                  "ChunkSize": 400, "ChunkOverlap": 40 },
   "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
                  "BatchSize": 64, "Timeout": 60000,
-                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72,
+                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72, "DistanceMargin": 0.15,
                  "QueryPrefix": "", "DocPrefix": "" },
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
@@ -209,7 +210,9 @@ out for other servers: nothing server specific is sent unless it is set.
 `Interval` is how often, in minutes, the background pass looks for work, and
 `Quiet` is how many minutes a conversation must go untouched before it is
 embedded. `MaxDistance` drops vector matches above that cosine distance (0
-turns the cutoff off); the right value depends on the model. `QueryPrefix` and
+turns the cutoff off), and `DistanceMargin` drops those further than that
+from the best match, since short messages such as "hi" sit at a similar
+distance from every query. The right values depend on the model. `QueryPrefix` and
 `DocPrefix` are prepended to search queries and stored chunks for models that
 expect instructions; Qwen3-Embedding wants a query prefix such as
 `"Instruct: Given a search query, retrieve relevant passages\nQuery: "` and

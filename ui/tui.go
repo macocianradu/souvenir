@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
+	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
@@ -22,6 +23,7 @@ const (
 	focusChat focusState = iota
 	focusModels
 	focusHistory
+	focusSearch
 )
 
 type uiModel struct {
@@ -42,6 +44,7 @@ type uiModel struct {
 	statusMessage  string
 	commands       commandList
 	history        history.DbClient
+	searcher       *search.Searcher
 	streamCh       <-chan llm.StreamEvent
 	streamCtx      context.Context
 	cancelStream   context.CancelFunc
@@ -81,7 +84,7 @@ type conversationRenamedMessage struct {
 	auto    bool
 }
 
-func InitialModel(ctx context.Context, config config.Config, client history.DbClient) uiModel {
+func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -121,6 +124,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		client:         *llm.NewLLMClient(config),
 		focus:          focusChat,
 		history:        client,
+		searcher:       searcher,
 		ctx:            ctx,
 		logger:         *slog.Default().With("Component", "TUI"),
 	}

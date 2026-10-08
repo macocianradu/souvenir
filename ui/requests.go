@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
@@ -67,6 +69,25 @@ func (m uiModel) getModels() tea.Cmd {
 			items = append(items, modelItem{id: model, name: model, description: model})
 		}
 		return modelsLoadedMsg{models: items, title: "Choose a model"}
+	}
+}
+
+func (m uiModel) searchConversations(query string) tea.Cmd {
+	return func() tea.Msg {
+		hits, err := m.searcher.Search(m.ctx, query, search.Options{})
+		if err != nil {
+			return modelsLoadedMsg{err: err}
+		}
+		items := []modelItem{}
+		for _, hit := range hits {
+			name := hit.ConversationTitle
+			if name == "" {
+				name = hit.ConversationId
+			}
+			snippet := strings.Join(strings.Fields(hit.Snippet), " ")
+			items = append(items, modelItem{id: hit.ConversationId, name: name, description: hit.Role + ": " + snippet})
+		}
+		return modelsLoadedMsg{models: items, title: "Results for " + query}
 	}
 }
 

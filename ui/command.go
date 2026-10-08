@@ -97,6 +97,22 @@ func (m uiModel) buildCommands() []command {
 			},
 		},
 		{
+			name:        "search",
+			description: "Search all conversations: /search <text>",
+			handler: func(m uiModel, args string) (uiModel, tea.Cmd) {
+				m.logger.Debug("Received search request", "query", args)
+				if args == "" {
+					m.setErrorMessage("Usage: /search <text>")
+					return m, nil
+				}
+				if !m.canSwitchConversation() {
+					return m, nil
+				}
+				m.focus = focusSearch
+				return m, m.searchConversations(args)
+			},
+		},
+		{
 			name:        "history",
 			description: "Open conversation history",
 			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {

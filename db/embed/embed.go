@@ -33,6 +33,10 @@ func (e EmbedStore) MaxDistance() float64 {
 	return e.embedder.MaxDistance()
 }
 
+func (e EmbedStore) DistanceMargin() float64 {
+	return e.embedder.DistanceMargin()
+}
+
 func (e EmbedStore) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
 	return e.embedder.EmbedQuery(ctx, query)
 }

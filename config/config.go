@@ -48,17 +48,18 @@ func (config DbConfig) ConnectionString() string {
 }
 
 type EmbeddingConfig struct {
-	Url         string
-	Key         string
-	Model       string
-	Dim         int
-	Timeout     int
-	BatchSize   int
-	Interval    int
-	Quiet       int
-	QueryPrefix string
-	DocPrefix   string
-	MaxDistance float64
+	Url            string
+	Key            string
+	Model          string
+	Dim            int
+	Timeout        int
+	BatchSize      int
+	Interval       int
+	Quiet          int
+	QueryPrefix    string
+	DocPrefix      string
+	MaxDistance    float64
+	DistanceMargin float64
 }
 
 type MemoryConfig struct {
@@ -169,14 +170,15 @@ func defaultConfig() *Config {
 			ChunkOverlap: 40,
 		},
 		EmbeddingConfig{
-			Url:         "",
-			Key:         "",
-			Model:       "",
-			BatchSize:   64,
-			Timeout:     60000,
-			Interval:    60,
-			Quiet:       300,
-			MaxDistance: 0.72,
+			Url:            "",
+			Key:            "",
+			Model:          "",
+			BatchSize:      64,
+			Timeout:        60000,
+			Interval:       60,
+			Quiet:          300,
+			MaxDistance:    0.72,
+			DistanceMargin: 0.15,
 		},
 	}
 }
@@ -269,6 +271,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Embedding.MaxDistance < 0 || cfg.Embedding.MaxDistance > 2 {
 		return errors.New("Embedding.MaxDistance must be between 0 and 2")
+	}
+	if cfg.Embedding.DistanceMargin < 0 {
+		return errors.New("Embedding.DistanceMargin must not be negative")
 	}
 	if cfg.Embedding.Quiet < 0 {
 		return errors.New("Embedding.Quiet must not be negative")
