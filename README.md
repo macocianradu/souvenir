@@ -175,8 +175,8 @@ parsing and writing files.
 
 ### Other frontends
 
-The TUI served over SSH, with the public key identifying the user, and a small
-embedded web frontend sharing the same core. Both reachable from outside the
+The TUI is served over SSH (`souvenir serve`); for now every authorized key is
+the same single user. Still to come: a small embedded web frontend sharing the same core. Both reachable from outside the
 home network behind a reverse proxy, with the origin locked to the proxy and
 client addresses trusted from a header only when the request actually came
 through it.
@@ -257,11 +257,28 @@ keyword search keeps working, so search gets worse rather than breaking.
 
 ## Running
 
-Needs Go 1.26 or newer and a reachable Postgres with the `vector` extension
+Needs Go 1.26.8 or newer and a reachable Postgres with the `vector` extension
 available. The database and tables are created on first run.
 
 ```sh
-go run .
+go run .          # the TUI in this terminal
+go run . serve    # the TUI over SSH
+```
+
+`serve` hosts the same TUI over SSH with [wish](https://github.com/charmbracelet/wish),
+one session per connection, all sharing the database and the background
+embedding. Only keys listed in `Ssh.AuthorizedKeys` (default `authorized_keys`,
+in OpenSSH format) can connect, and it refuses to start without that file. The
+host key is generated on first start at `Ssh.HostKeyPath` (default
+`.ssh/souvenir_ed25519`) and must persist, or clients will see it change.
+
+```sh
+ssh -p 23234 localhost
+```
+
+```json
+"Ssh": { "Listen": ":23234", "HostKeyPath": ".ssh/souvenir_ed25519",
+         "AuthorizedKeys": "authorized_keys" }
 ```
 
 ## License

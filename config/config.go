@@ -23,6 +23,13 @@ type Config struct {
 	Logging   []LogConfig
 	Db        DbConfig
 	Embedding EmbeddingConfig
+	Ssh       SshConfig
+}
+
+type SshConfig struct {
+	Listen         string
+	HostKeyPath    string
+	AuthorizedKeys string
 }
 
 type DbConfig struct {
@@ -183,6 +190,11 @@ func defaultConfig() *Config {
 			Quiet:          300,
 			MaxDistance:    0.72,
 			DistanceMargin: 0.15,
+		},
+		SshConfig{
+			Listen:         ":23234",
+			HostKeyPath:    ".ssh/souvenir_ed25519",
+			AuthorizedKeys: "authorized_keys",
 		},
 	}
 }

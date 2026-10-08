@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,8 +22,20 @@ import (
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
 )
 
+type app struct {
+	cfg      *config.Config
+	history  *history.DbClient
+	searcher *search.Searcher
+	registry *tools.Registry
+	memories *memory.Store
+}
+
+func (a app) newModel(ctx context.Context) tea.Model {
+	return ui.InitialModel(ctx, *a.cfg, *a.history, a.searcher, a.registry, a.memories)
+}
+
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	config, err := config.Load(".config.json")
 	if err != nil {
@@ -34,7 +49,6 @@ func main() {
 		fatal("Error while initializing database", err)
 	}
 	defer pool.Close()
-	historyClient := history.New(pool, config.Db)
 
 	embedder := llm.NewEmbedder(config.Embedding)
 	store, err := embed.NewEmbedStore(ctx, pool, config.Db.DbName, *embedder)
@@ -51,12 +65,27 @@ func main() {
 		go runEmbedding(ctx, config, store, memories, logger)
 	}
 	searcher := search.New(pool, store)
+	a := app{
+		cfg:      config,
+		history:  history.New(pool, config.Db),
+		searcher: searcher,
+		registry: tools.NewRegistry(append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)...),
+		memories: memories,
+	}
 
-	registry := tools.NewRegistry(append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)...)
-
-	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry, memories))
-	if _, err := p.Run(); err != nil {
-		fatal("Alas, there's been an error", err)
+	switch mode := strings.Join(os.Args[1:], " "); mode {
+	case "":
+		p := tea.NewProgram(a.newModel(ctx))
+		if _, err := p.Run(); err != nil {
+			fatal("Alas, there's been an error", err)
+		}
+	case "serve":
+		if err := serve(ctx, config.Ssh, a.newModel); err != nil {
+			fatal("SSH server error", err)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\nusage: souvenir [serve]\n", mode)
+		os.Exit(2)
 	}
 }
 
