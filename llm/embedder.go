@@ -51,6 +51,10 @@ func NewEmbedder(cfg config.EmbeddingConfig) *Embedder {
 	}
 }
 
+func (e Embedder) MaxDistance() float64 {
+	return e.Cfg.MaxDistance
+}
+
 func (e Embedder) Dim() int {
 	return e.Cfg.Dim
 }
@@ -67,6 +71,25 @@ func (e Embedder) ID() string {
 		}, e.Cfg.Model)
 	}
 	return e.id
+}
+
+func (e Embedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	if e.Cfg.DocPrefix == "" {
+		return e.EmbedBatch(ctx, texts)
+	}
+	prefixed := make([]string, len(texts))
+	for i, text := range texts {
+		prefixed[i] = e.Cfg.DocPrefix + text
+	}
+	return e.EmbedBatch(ctx, prefixed)
+}
+
+func (e Embedder) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	vecs, err := e.EmbedBatch(ctx, []string{e.Cfg.QueryPrefix + query})
+	if err != nil {
+		return nil, err
+	}
+	return vecs[0], nil
 }
 
 func (e Embedder) EmbedBatch(ctx context.Context, text []string) ([][]float32, error) {
@@ -106,12 +129,9 @@ func (e Embedder) EmbedBatch(ctx context.Context, text []string) ([][]float32, e
 		return [][]float32{}, err
 	}
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		e.logger.Error("Call returned non 200 status",
-			"statusCode", resp.StatusCode,
-			"status", resp.Status)
-		return [][]float32{},
-			errors.New("Call returned invalid status " +
-				resp.Status)
+		body := strings.TrimSpace(string(data[:min(len(data), 1024)]))
+		e.logger.Error("Call returned non 200 status", "status", resp.Status, "body", body)
+		return nil, fmt.Errorf("Call returned %s: %s", resp.Status, body)
 	}
 
 	var response EmbedResponse

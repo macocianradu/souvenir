@@ -29,6 +29,14 @@ func (e EmbedStore) TableName() string {
 	return e.tableName
 }
 
+func (e EmbedStore) MaxDistance() float64 {
+	return e.embedder.MaxDistance()
+}
+
+func (e EmbedStore) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	return e.embedder.EmbedQuery(ctx, query)
+}
+
 func (e EmbedStore) GetConversationsToEmbed(ctx context.Context, quietMinutes int) ([]string, error) {
 	rows, err := e.pool.Query(ctx, fmt.Sprintf(
 		`
@@ -117,7 +125,7 @@ func (e EmbedStore) EmbedConversation(ctx context.Context, conversationId string
 		for i, chunk := range batch {
 			texts[i] = chunk.content
 		}
-		vecs, err := e.embedder.EmbedBatch(ctx, texts)
+		vecs, err := e.embedder.EmbedDocuments(ctx, texts)
 		if err != nil {
 			e.logger.Error("There was an error embedding batch", "conversation_id", conversationId, "error", err)
 			return err

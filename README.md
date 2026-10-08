@@ -78,10 +78,11 @@ several handlers at once with their own level, format and target.
 
 ## Where it stops
 
-Vectors get written, but nothing reads them back. There is no similarity query,
-no merge with the keyword index, and nothing feeding retrieved context into a
-prompt. `db/memory` is an empty package waiting for the memory store. That is
-the next piece of work.
+`db/search` runs hybrid search: cosine distance over the vector table and
+`websearch_to_tsquery` over the text index, merged with reciprocal rank fusion,
+falling back to keywords alone when embeddings are unavailable. Nothing calls it
+from the UI yet, and nothing feeds retrieved context into a prompt.
+`db/memory` is an empty package waiting for the memory store.
 
 ## Planned
 
@@ -195,7 +196,8 @@ terminal, so an entry without a target writes to `souvenir.log`.
                  "ChunkSize": 400, "ChunkOverlap": 40 },
   "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
                  "BatchSize": 64, "Timeout": 60000,
-                 "Interval": 60, "Quiet": 300 },
+                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72,
+                 "QueryPrefix": "", "DocPrefix": "" },
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
 ```
@@ -206,7 +208,12 @@ out for other servers: nothing server specific is sent unless it is set.
 `Embedding.Dim` is required and must match the model's output size.
 `Interval` is how often, in minutes, the background pass looks for work, and
 `Quiet` is how many minutes a conversation must go untouched before it is
-embedded.
+embedded. `MaxDistance` drops vector matches above that cosine distance (0
+turns the cutoff off); the right value depends on the model. `QueryPrefix` and
+`DocPrefix` are prepended to search queries and stored chunks for models that
+expect instructions; Qwen3-Embedding wants a query prefix such as
+`"Instruct: Given a search query, retrieve relevant passages\nQuery: "` and
+no document prefix. Changing `DocPrefix` does not re-embed existing chunks.
 
 The two model settings behave differently, which is worth knowing before you
 change one.

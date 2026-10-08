@@ -47,12 +47,12 @@ func fatal(msg string, err error) {
 	os.Exit(1)
 }
 
-func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) {
+func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *embed.EmbedStore {
 	embedder := llm.NewEmbedder(cfg.Embedding)
 	store, err := embed.NewEmbedStore(ctx, pool, cfg.Db.DbName, *embedder)
 	if err != nil {
 		logger.Error("Embedding disabled", "error", err)
-		return
+		return nil
 	}
 	go func() {
 		ticker := time.NewTicker(time.Duration(cfg.Embedding.Interval) * time.Minute)
@@ -66,6 +66,7 @@ func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool,
 			}
 		}
 	}()
+	return store
 }
 
 func runEmbedding(ctx context.Context, em *embed.EmbedStore, quietMinutes int, logger *slog.Logger) {

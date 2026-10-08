@@ -175,6 +175,9 @@ func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId st
 		return "", err
 	}
 
+	if message.Role != "user" && message.Role != "assistant" {
+		return id, nil
+	}
 	chunks := Chunk(message.Content, cl.cfg.ChunkSize, cl.cfg.ChunkOverlap)
 	if len(chunks) == 0 {
 		return id, nil
