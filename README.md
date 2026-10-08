@@ -38,7 +38,7 @@ return a plain string so the packages behind them never import the API types.
 Esc cancels a running tool.
 
 The one tool so far is `search_history`, which runs the same hybrid search as
-`/search` over every other conversation and returns the matching messages with
+the `/history` search over every other conversation and returns the matching messages with
 their conversation and date, so the model can look up what was said before.
 
 Conversations get a title and a summary from a single cheap-model call, using a
@@ -57,12 +57,12 @@ summarizing off.
 ### Terminal UI
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
-fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new`,
-`/rename` and `/search`. The history browser reopens any past conversation and picks it back
-up; `x` (or Delete) on a conversation deletes it, with its messages, summaries
+fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new` and
+`/rename`. The history browser reopens any past conversation and picks it back
+up. `/` in it searches every conversation by keyword and by meaning, Esc
+clearing the search, and `x` (or Delete) on a conversation deletes it, with its messages, summaries
 and search index, after a confirmation, since it cannot be undone. `/rename` asks the title model for a title, and `/rename <title>` sets one
-by hand. `/search <text>` searches every conversation and opens the one you
-pick.
+by hand.
 
 ### Storage
 
@@ -103,7 +103,7 @@ several handlers at once with their own level, format and target.
 `db/search` runs hybrid search: cosine distance over the vector table and
 `websearch_to_tsquery` over the text index, merged with reciprocal rank fusion,
 falling back to keywords alone when embeddings are unavailable. It backs
-`/search` and the `search_history` tool, but nothing feeds retrieved context
+the `/history` search and the `search_history` tool, but nothing feeds retrieved context
 into a prompt automatically yet.
 `db/memory` is an empty package waiting for the memory store.
 

@@ -115,14 +115,19 @@ func (m uiModel) getModels() tea.Cmd {
 	}
 }
 
-func (m uiModel) searchConversations(query string) tea.Cmd {
+func (m uiModel) searchHistory(query string) tea.Cmd {
 	return func() tea.Msg {
-		hits, err := m.searcher.Search(m.ctx, query, search.Options{})
+		hits, err := m.searcher.Search(m.ctx, query, search.Options{Limit: 50})
 		if err != nil {
-			return modelsLoadedMsg{err: err}
+			return pickerResultsMsg{query: query, err: err}
 		}
 		items := []modelItem{}
+		seen := map[string]bool{}
 		for _, hit := range hits {
+			if seen[hit.ConversationId] {
+				continue
+			}
+			seen[hit.ConversationId] = true
 			name := hit.ConversationTitle
 			if name == "" {
 				name = "Untitled"
@@ -130,7 +135,7 @@ func (m uiModel) searchConversations(query string) tea.Cmd {
 			snippet := strings.Join(strings.Fields(hit.Snippet), " ")
 			items = append(items, modelItem{id: hit.ConversationId, name: name, description: hit.Role + ": " + snippet})
 		}
-		return modelsLoadedMsg{models: items, title: "Results for " + query}
+		return pickerResultsMsg{query: query, items: items}
 	}
 }
 
@@ -154,6 +159,6 @@ func (m uiModel) getHistory() tea.Cmd {
 			}
 			items = append(items, modelItem{id: conv.Id, name: name, description: conv.Summary})
 		}
-		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off", deletable: true}
+		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off", searchable: true}
 	}
 }

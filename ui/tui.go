@@ -24,7 +24,6 @@ const (
 	focusChat focusState = iota
 	focusModels
 	focusHistory
-	focusSearch
 )
 
 type uiModel struct {
