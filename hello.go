@@ -14,6 +14,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	"git.estatecloud.org/radumaco/souvenir/llm"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,7 +38,9 @@ func main() {
 	store := startEmbedding(ctx, config, pool, logger)
 	searcher := search.New(pool, store)
 
-	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher))
+	registry := tools.NewRegistry()
+
+	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry))
 	if _, err := p.Run(); err != nil {
 		fatal("Alas, there's been an error", err)
 	}

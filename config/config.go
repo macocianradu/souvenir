@@ -77,9 +77,10 @@ type ApiConfig struct {
 }
 
 type LLMConfig struct {
-	Model      string
-	TitleModel string
-	Thinking   *bool
+	Model         string
+	TitleModel    string
+	Thinking      *bool
+	MaxToolRounds int
 }
 
 type LogConfig struct {
@@ -157,7 +158,7 @@ func defaultConfig() *Config {
 			Key:     "",
 			Timeout: 300000,
 		},
-		LLMConfig{Model: ""},
+		LLMConfig{MaxToolRounds: 28},
 		[]LogConfig{{Level: slog.LevelInfo, Format: "text"}},
 		DbConfig{
 			Url:          "localhost",
@@ -253,6 +254,9 @@ func setField(f reflect.Value, val string) error {
 func (cfg Config) validate() error {
 	if cfg.Api.Url == "" {
 		return errors.New("No API url configured")
+	}
+	if cfg.Llm.MaxToolRounds <= 0 {
+		return errors.New("Llm.MaxToolRounds must be positive")
 	}
 	if cfg.Embedding.Model == "" {
 		return errors.New("No embedding model configured")

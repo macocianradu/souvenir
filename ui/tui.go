@@ -15,6 +15,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
 type focusState int
@@ -45,6 +46,7 @@ type uiModel struct {
 	commands       commandList
 	history        history.DbClient
 	searcher       *search.Searcher
+	tools          *tools.Registry
 	streamCh       <-chan llm.StreamEvent
 	streamCtx      context.Context
 	cancelStream   context.CancelFunc
@@ -57,6 +59,8 @@ type uiModel struct {
 	saveQueued     bool
 	titling        bool
 	convGen        int
+	toolRounds     int
+	toolTrail      []model.Message
 }
 
 type streamEventMessage struct {
@@ -76,6 +80,10 @@ type conversationSavedMessage struct {
 	err          error
 }
 
+type toolsDoneMessage struct {
+	results []model.Message
+}
+
 type conversationRenamedMessage struct {
 	title   string
 	summary string
@@ -84,7 +92,7 @@ type conversationRenamedMessage struct {
 	auto    bool
 }
 
-func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher) uiModel {
+func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher, registry *tools.Registry) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -125,6 +133,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		focus:          focusChat,
 		history:        client,
 		searcher:       searcher,
+		tools:          registry,
 		ctx:            ctx,
 		logger:         *slog.Default().With("Component", "TUI"),
 	}

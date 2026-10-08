@@ -13,12 +13,25 @@ import (
 func (m uiModel) callAgent(ctx context.Context, messages []model.Message) tea.Cmd {
 	m.logger.Debug("Calling agent", "messages", len(messages))
 	return func() tea.Msg {
-		resp, err := m.client.QueryStream(ctx, messages)
+		resp, err := m.client.QueryStream(ctx, messages, m.tools.Specs())
 		if err != nil {
 			m.logger.Error("Error while calling stream query", "error", err)
 			return streamClosedMessage{err: err}
 		}
 		return streamStartedMessage{ch: resp}
+	}
+}
+
+func (m uiModel) runTools(ctx context.Context, calls []model.ToolCall) tea.Cmd {
+	return func() tea.Msg {
+		var results []model.Message
+		for _, call := range calls {
+			if ctx.Err() != nil {
+				break
+			}
+			results = append(results, m.tools.Call(ctx, call))
+		}
+		return toolsDoneMessage{results: results}
 	}
 }
 

@@ -31,7 +31,7 @@ type ChatClient struct {
 type ChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []model.Message `json:"messages"`
-	Tools    []config.Tool   `json:"tools,omitempty"`
+	Tools    []ToolSpec      `json:"tools,omitempty"`
 	Stream   bool            `json:"stream,omitempty"`
 	Kwargs   *Kwargs         `json:"chat_template_kwargs,omitempty"`
 }

@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/cursor"
@@ -63,6 +65,9 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case conversationSavedMessage:
 		return m.handleSaved(msg)
+
+	case toolsDoneMessage:
+		return m.handleToolsDone(msg)
 	}
 
 	var spinnerCmd tea.Cmd
@@ -186,6 +191,8 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.viewport.GotoBottom()
 	m.streaming = true
 	m.streamCtx, m.cancelStream = context.WithCancel(m.ctx)
+	m.toolRounds = 0
+	m.toolTrail = nil
 	m.startWait()
 	return m, tea.Batch(m.callAgent(m.streamCtx, m.conversation.Messages), m.requestSave(), m.spinner.Tick)
 }
@@ -212,6 +219,9 @@ func (m uiModel) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 	if ev.Done {
 		m.answerBuffer.Reset()
 		for _, r := range ev.Messages {
+			if len(r.ToolCalls) > 0 {
+				return m.handleToolCalls(r)
+			}
 			m.appendMessage(r)
 		}
 		return m.handleStreamClosed(streamClosedMessage{})
@@ -219,6 +229,30 @@ func (m uiModel) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
 
 	m.refreshViewport()
 	return m, waitForEvent(m.streamCh)
+}
+
+func (m uiModel) handleToolCalls(reply model.Message) (tea.Model, tea.Cmd) {
+	m.streamCh = nil
+	if m.toolRounds >= m.client.Cfg.Llm.MaxToolRounds {
+		return m.handleStreamClosed(streamClosedMessage{err: errors.New("tool call limit reached")})
+	}
+	m.toolRounds++
+	m.toolTrail = append(m.toolTrail, reply)
+	m.refreshViewport()
+	return m, m.runTools(m.streamCtx, reply.ToolCalls)
+}
+
+func (m uiModel) handleToolsDone(msg toolsDoneMessage) (tea.Model, tea.Cmd) {
+	if !m.streaming {
+		return m, nil
+	}
+	m.toolTrail = append(m.toolTrail, msg.results...)
+	if m.streamCtx.Err() != nil {
+		return m.handleStreamClosed(streamClosedMessage{})
+	}
+	m.refreshViewport()
+	turn := append(slices.Clone(m.conversation.Messages), m.toolTrail...)
+	return m, m.callAgent(m.streamCtx, turn)
 }
 
 func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd) {
@@ -326,6 +360,7 @@ func (m *uiModel) openConversation(conv model.Conversation) {
 	m.convGen++
 	m.titling = false
 	m.thinkingBuffer.Reset()
+	m.toolTrail = nil
 	m.refreshViewport()
 	m.viewport.GotoBottom()
 }

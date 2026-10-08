@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	config "git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
@@ -50,11 +49,11 @@ type ToolCallDelta struct {
 	} `json:"function"`
 }
 
-func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message) (<-chan StreamEvent, error) {
+func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message, tools []ToolSpec) (<-chan StreamEvent, error) {
 	requestBody := ChatRequest{
 		Model:    cl.Cfg.Llm.Model,
 		Messages: messages,
-		Tools:    config.AvailableTools(),
+		Tools:    tools,
 		Stream:   true,
 		Kwargs:   cl.templateKwargs(true),
 	}

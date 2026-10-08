@@ -26,9 +26,16 @@ into events on a channel, and the UI renders tokens as they arrive. Esc cancels
 a reply mid-stream and keeps what has arrived so far. Content and
 reasoning are separate events, so models that emit `reasoning_content` can have
 their thinking shown apart from the answer. Tool call fragments are accumulated
-by index across chunks and assembled into a complete message at the end, so the
-wire format for tool calling is handled even though nothing dispatches tools
-yet.
+by index across chunks and assembled into a complete message at the end.
+
+Tool calls run in a loop: the calls are dispatched locally, their results
+appended, and the model called again, up to `Llm.MaxToolRounds` rounds. The
+rounds are working state for the turn and are shown faded above the answer, but
+only the final reply is saved, so a reopened conversation sends exactly what a
+live one does; the cost is that the model reruns a lookup it needs again later.
+Tools live in a registry mapping a name to a Go function and a JSON schema, and
+return a plain string so the packages behind them never import the API types.
+Esc cancels a running tool. No tools are registered yet.
 
 Conversations get a title and a summary from a single cheap-model call, using a
 separate model if you configure one. It runs in the background after the first
@@ -121,15 +128,10 @@ the message chunks.
 Reading, writing and searching memory become tools, so the assistant curates its
 own memory as it goes.
 
-### Tool calling
+### Tools
 
-A loop around the chat call: if the response contains tool calls, dispatch them
-locally, append the results, call again, with an iteration cap so it cannot spin
-forever. Tools live in a registry mapping a name to a Go function and a JSON
-schema, and return a plain string so the packages behind them never import the
-API types.
-
-Tools are exposed through the API's native tool calling. MCP would only be worth
+The loop is in place (see Chat above); the tools themselves are next, starting
+with searching past conversations. Tools are exposed through the API's native tool calling. MCP would only be worth
 the transport layer if these tools needed to be reachable from other clients,
 and they do not, since they live in the same binary.
 
@@ -191,7 +193,8 @@ terminal, so an entry without a target writes to `souvenir.log`.
 ```json
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
-  "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false },
+  "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false,
+                 "MaxToolRounds": 8 },
   "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
                  "User": "...", "Password": "...",
                  "ChunkSize": 400, "ChunkOverlap": 40 },
