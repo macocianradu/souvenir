@@ -45,6 +45,15 @@ Conversations get a title and a summary from a single cheap-model call, using a
 separate model if you configure one. It runs in the background after the first
 reply, and never replaces a title set with `/rename <title>`.
 
+Long conversations are kept inside `Llm.ContextBudget` tokens (estimated at
+four characters each) with a rolling summary. When a reply pushes the context
+over budget, everything but the last `Llm.KeepRecent` messages is folded, along
+with the previous summary, into a new one by the title model, in the background.
+Summaries live in their own table, one row per "messages 1..n", and the model
+then gets the latest summary plus the messages after it. The `messages` table is
+untouched, so history and search still see every message. A budget of 0 turns
+summarizing off.
+
 ### Terminal UI
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
@@ -116,9 +125,9 @@ titles are generated and unreliable, and returns the matching conversation with
 a snippet. It shows up both as a search box in the UI and as a tool the model
 can call when it decides an old conversation is relevant.
 
-Context assembly keeps a growing conversation inside a token budget: the last
-few turns verbatim, a rolling summary of everything older, the most relevant
-chunks pulled from earlier in the same conversation, and relevant memories.
+Context assembly already keeps the last few turns verbatim and a rolling summary
+of everything older (see Chat above). Still to come: the most relevant chunks
+pulled from earlier in the same conversation, and relevant memories.
 Tool output is skipped or marked when indexing, because a fetched web page will
 otherwise turn up in recall for every term it happens to mention. Queries and
 documents get different prefixes where the model expects them, which is easy to
@@ -199,7 +208,7 @@ terminal, so an entry without a target writes to `souvenir.log`.
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
   "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false,
-                 "MaxToolRounds": 8 },
+                 "MaxToolRounds": 28, "ContextBudget": 12000, "KeepRecent": 8 },
   "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
                  "User": "...", "Password": "...",
                  "ChunkSize": 400, "ChunkOverlap": 40 },

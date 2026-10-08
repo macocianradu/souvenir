@@ -62,6 +62,15 @@ var migrations = []string{
 	CREATE UNIQUE INDEX IF NOT EXISTS message_chunks_message_id_content_hash_idx
 	    ON message_chunks (message_id, content_hash);
 	`,
+	`
+	CREATE TABLE conversation_summaries (
+		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+		through_seq     INTEGER NOT NULL,
+		content         TEXT NOT NULL,
+		created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (conversation_id, through_seq)
+	);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

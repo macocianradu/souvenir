@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -65,8 +66,38 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 		cl.logger.Error("Could not fetch messages", "conversation_id", id, "error", err)
 		return conv, err
 	}
+	var summary model.ContextSummary
+	err = cl.pool.QueryRow(ctx,
+		`
+		  SELECT through_seq, content
+		    FROM conversation_summaries
+		   WHERE conversation_id = $1
+		ORDER BY through_seq DESC
+		   LIMIT 1
+		`, id).Scan(&summary.ThroughSeq, &summary.Content)
+	switch {
+	case err == nil:
+		conv.ContextSummary = &summary
+	case !errors.Is(err, pgx.ErrNoRows):
+		cl.logger.Error("Could not fetch context summary", "conversation_id", id, "error", err)
+		return conv, err
+	}
 	cl.logger.Debug("Found conversation", "id", conv.Id, "messages", len(conv.Messages))
 	return conv, nil
+}
+
+func (cl DbClient) SaveContextSummary(ctx context.Context, conversationId string, summary model.ContextSummary) error {
+	_, err := cl.pool.Exec(ctx,
+		`
+		INSERT INTO conversation_summaries (conversation_id, through_seq, content)
+		     VALUES ($1, $2, $3)
+		ON CONFLICT (conversation_id, through_seq) DO UPDATE
+		        SET content = EXCLUDED.content
+		`, conversationId, summary.ThroughSeq, summary.Content)
+	if err != nil {
+		cl.logger.Error("Could not save context summary", "conversation_id", conversationId, "error", err)
+	}
+	return err
 }
 
 func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, error) {

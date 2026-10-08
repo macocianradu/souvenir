@@ -117,11 +117,47 @@ func (cl ChatClient) Models(ctx context.Context) ([]string, error) {
 	return ret, nil
 }
 
-func (cl ChatClient) Rename(ctx context.Context, messages []model.Message) (RenameResponse, error) {
-	llm := cl.Cfg.Llm.TitleModel
-	if llm == "" {
-		llm = cl.Cfg.Llm.Model
+func (cl ChatClient) titleModel() string {
+	if cl.Cfg.Llm.TitleModel != "" {
+		return cl.Cfg.Llm.TitleModel
 	}
+	return cl.Cfg.Llm.Model
+}
+
+const summarizePrompt = "You maintain a running summary of a conversation between a user and an assistant. " +
+	"Update the summary with the new messages. Keep facts, decisions, names, numbers, preferences the user " +
+	"stated and questions still open; drop greetings and filler. Write in the third person as plain prose, " +
+	"at most 300 words. Reply with the summary only."
+
+func (cl ChatClient) Summarize(ctx context.Context, previous string, messages []model.Message) (string, error) {
+	var prompt strings.Builder
+	if previous != "" {
+		prompt.WriteString("Summary so far:\n" + previous + "\n\n")
+	}
+	prompt.WriteString("New messages:\n")
+	for _, m := range messages {
+		fmt.Fprintf(&prompt, "%s: %s\n\n", m.Role, m.Content)
+	}
+	out, err := cl.Call(ctx, ChatRequest{
+		Model: cl.titleModel(),
+		Messages: []model.Message{
+			{Role: "system", Content: summarizePrompt},
+			{Role: "user", Content: prompt.String()},
+		},
+		Kwargs: cl.templateKwargs(false),
+	})
+	if err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(out[0].Content)
+	if summary == "" {
+		return "", errors.New("Summary reply was empty")
+	}
+	return summary, nil
+}
+
+func (cl ChatClient) Rename(ctx context.Context, messages []model.Message) (RenameResponse, error) {
+	llm := cl.titleModel()
 	request := ChatRequest{
 		Model: llm,
 		Messages: append([]model.Message{{

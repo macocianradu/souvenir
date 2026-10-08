@@ -81,6 +81,8 @@ type LLMConfig struct {
 	TitleModel    string
 	Thinking      *bool
 	MaxToolRounds int
+	ContextBudget int
+	KeepRecent    int
 }
 
 type LogConfig struct {
@@ -158,7 +160,7 @@ func defaultConfig() *Config {
 			Key:     "",
 			Timeout: 300000,
 		},
-		LLMConfig{MaxToolRounds: 28},
+		LLMConfig{MaxToolRounds: 28, ContextBudget: 12000, KeepRecent: 8},
 		[]LogConfig{{Level: slog.LevelInfo, Format: "text"}},
 		DbConfig{
 			Url:          "localhost",
@@ -257,6 +259,12 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Llm.MaxToolRounds <= 0 {
 		return errors.New("Llm.MaxToolRounds must be positive")
+	}
+	if cfg.Llm.ContextBudget < 0 {
+		return errors.New("Llm.ContextBudget must not be negative")
+	}
+	if cfg.Llm.KeepRecent < 1 {
+		return errors.New("Llm.KeepRecent must be at least 1")
 	}
 	if cfg.Embedding.Model == "" {
 		return errors.New("No embedding model configured")

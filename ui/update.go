@@ -68,6 +68,15 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolsDoneMessage:
 		return m.handleToolsDone(msg)
+
+	case summarizedMessage:
+		m.summarizing = false
+		if msg.err != nil {
+			m.logger.Error("Could not summarize conversation", "error", msg.err)
+		} else if msg.gen == m.convGen {
+			m.conversation.ContextSummary = msg.summary
+		}
+		return m, nil
 	}
 
 	var spinnerCmd tea.Cmd
@@ -194,7 +203,7 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.toolRounds = 0
 	m.toolTrail = nil
 	m.startWait()
-	return m, tea.Batch(m.callAgent(m.streamCtx, m.conversation.Messages), m.requestSave(), m.spinner.Tick)
+	return m, tea.Batch(m.callAgent(m.streamCtx, m.conversation.ContextMessages()), m.requestSave(), m.spinner.Tick)
 }
 
 func (m *uiModel) appendMessage(msg model.Message) {
@@ -251,7 +260,7 @@ func (m uiModel) handleToolsDone(msg toolsDoneMessage) (tea.Model, tea.Cmd) {
 		return m.handleStreamClosed(streamClosedMessage{})
 	}
 	m.refreshViewport()
-	turn := append(slices.Clone(m.conversation.Messages), m.toolTrail...)
+	turn := append(slices.Clone(m.conversation.ContextMessages()), m.toolTrail...)
 	return m, m.callAgent(m.streamCtx, turn)
 }
 
@@ -281,7 +290,20 @@ func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd
 		m.titling = true
 		cmd = tea.Batch(cmd, m.renameConversation(true))
 	}
+	if !cancelled && msg.err == nil && m.needsSummary() {
+		m.summarizing = true
+		cmd = tea.Batch(cmd, m.summarizeConversation())
+	}
 	return m, cmd
+}
+
+func (m uiModel) needsSummary() bool {
+	budget := m.client.Cfg.Llm.ContextBudget
+	if m.summarizing || budget == 0 || m.conversation.Id == "" {
+		return false
+	}
+	return len(m.conversation.Unsummarized()) > m.client.Cfg.Llm.KeepRecent &&
+		model.EstimateTokens(m.conversation.ContextMessages()) > budget
 }
 
 func (m uiModel) needsTitle() bool {
@@ -359,6 +381,7 @@ func (m *uiModel) openConversation(conv model.Conversation) {
 	m.conversation = conv
 	m.convGen++
 	m.titling = false
+	m.summarizing = false
 	m.thinkingBuffer.Reset()
 	m.toolTrail = nil
 	m.refreshViewport()

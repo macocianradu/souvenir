@@ -70,6 +70,28 @@ func (m uiModel) renameConversation(auto bool) tea.Cmd {
 	}
 }
 
+func (m uiModel) summarizeConversation() tea.Cmd {
+	conv := m.conversation
+	gen := m.convGen
+	pending := conv.Unsummarized()
+	fold := pending[:len(pending)-m.client.Cfg.Llm.KeepRecent]
+	previous := ""
+	if conv.ContextSummary != nil {
+		previous = conv.ContextSummary.Content
+	}
+	return func() tea.Msg {
+		content, err := m.client.Summarize(m.ctx, previous, fold)
+		if err != nil {
+			return summarizedMessage{err: err, gen: gen}
+		}
+		summary := &model.ContextSummary{ThroughSeq: fold[len(fold)-1].Seq, Content: content}
+		if err := m.history.SaveContextSummary(m.ctx, conv.Id, *summary); err != nil {
+			return summarizedMessage{err: err, gen: gen}
+		}
+		return summarizedMessage{summary: summary, gen: gen}
+	}
+}
+
 func (m uiModel) getModels() tea.Cmd {
 	m.logger.Debug("Querying models")
 	return func() tea.Msg {

@@ -58,6 +58,7 @@ type uiModel struct {
 	saving         bool
 	saveQueued     bool
 	titling        bool
+	summarizing    bool
 	convGen        int
 	toolRounds     int
 	toolTrail      []model.Message
@@ -78,6 +79,12 @@ type streamStartedMessage struct {
 type conversationSavedMessage struct {
 	conversation model.Conversation
 	err          error
+}
+
+type summarizedMessage struct {
+	summary *model.ContextSummary
+	err     error
+	gen     int
 }
 
 type toolsDoneMessage struct {
