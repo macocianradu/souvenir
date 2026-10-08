@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
@@ -94,8 +95,49 @@ func (m uiModel) summarizeConversation() tea.Cmd {
 
 func (m uiModel) deleteConversation(item modelItem) tea.Cmd {
 	return func() tea.Msg {
-		return conversationDeletedMessage{item: item, err: m.history.DeleteConversation(m.ctx, item.id)}
+		return itemDeletedMessage{item: item, err: m.history.DeleteConversation(m.ctx, item.id)}
 	}
+}
+
+func (m uiModel) recallMemories(ctx context.Context, query string) tea.Cmd {
+	turn := m.turn
+	limit := m.client.Cfg.Llm.MemoryRecall
+	return func() tea.Msg {
+		found, err := m.memories.Search(ctx, query, limit)
+		return memoriesRecalledMessage{turn: turn, memories: found, err: err}
+	}
+}
+
+func (m uiModel) getMemories() tea.Cmd {
+	return func() tea.Msg {
+		all, err := m.memories.List(m.ctx)
+		if err != nil {
+			return modelsLoadedMsg{err: err}
+		}
+		return modelsLoadedMsg{models: memoryItems(all), title: "What the assistant remembers", searchable: true,
+			warning: "Forget %q permanently? It cannot be recovered."}
+	}
+}
+
+func (m uiModel) searchMemories(query string) tea.Cmd {
+	return func() tea.Msg {
+		found, err := m.memories.Search(m.ctx, query, 50)
+		return pickerResultsMsg{query: query, items: memoryItems(found), err: err}
+	}
+}
+
+func (m uiModel) forgetMemory(item modelItem) tea.Cmd {
+	return func() tea.Msg {
+		return itemDeletedMessage{item: item, err: m.memories.Forget(m.ctx, item.id)}
+	}
+}
+
+func memoryItems(memories []memory.Memory) []modelItem {
+	items := make([]modelItem, len(memories))
+	for i, mem := range memories {
+		items[i] = modelItem{id: mem.Id, name: mem.Content, description: "saved " + mem.CreatedAt.Format("2006-01-02")}
+	}
+	return items
 }
 
 func (m uiModel) getModels() tea.Cmd {
@@ -159,6 +201,7 @@ func (m uiModel) getHistory() tea.Cmd {
 			}
 			items = append(items, modelItem{id: conv.Id, name: name, description: conv.Summary})
 		}
-		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off", searchable: true}
+		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off", searchable: true,
+			warning: "Delete %q permanently? Its messages, summaries and search index are removed and cannot be recovered."}
 	}
 }

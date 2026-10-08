@@ -33,7 +33,7 @@ func newHarness(t *testing.T, apiUrl string, registry *tools.Registry) *harness 
 		Api: config.ApiConfig{Url: apiUrl, Timeout: 1000},
 		Llm: config.LLMConfig{MaxToolRounds: 3, KeepRecent: 2},
 	}
-	h := &harness{t: t, m: InitialModel(context.Background(), cfg, history.DbClient{}, nil, registry)}
+	h := &harness{t: t, m: InitialModel(context.Background(), cfg, history.DbClient{}, nil, registry, nil)}
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	return h
 }

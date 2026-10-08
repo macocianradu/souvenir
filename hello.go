@@ -54,7 +54,7 @@ func main() {
 
 	registry := tools.NewRegistry(append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)...)
 
-	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry))
+	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry, memories))
 	if _, err := p.Run(); err != nil {
 		fatal("Alas, there's been an error", err)
 	}

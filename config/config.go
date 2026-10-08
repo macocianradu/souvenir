@@ -83,6 +83,7 @@ type LLMConfig struct {
 	MaxToolRounds int
 	ContextBudget int
 	KeepRecent    int
+	MemoryRecall  int
 }
 
 type LogConfig struct {
@@ -160,7 +161,7 @@ func defaultConfig() *Config {
 			Key:     "",
 			Timeout: 300000,
 		},
-		LLMConfig{MaxToolRounds: 28, ContextBudget: 12000, KeepRecent: 8},
+		LLMConfig{MaxToolRounds: 28, ContextBudget: 12000, KeepRecent: 8, MemoryRecall: 5},
 		[]LogConfig{{Level: slog.LevelInfo, Format: "text"}},
 		DbConfig{
 			Url:          "localhost",
@@ -265,6 +266,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Llm.KeepRecent < 1 {
 		return errors.New("Llm.KeepRecent must be at least 1")
+	}
+	if cfg.Llm.MemoryRecall < 0 {
+		return errors.New("Llm.MemoryRecall must not be negative")
 	}
 	if cfg.Embedding.Model == "" {
 		return errors.New("No embedding model configured")

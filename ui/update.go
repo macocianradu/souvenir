@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/cursor"
@@ -29,7 +28,13 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateTextarea(msg)
 
 	case pickerSearchMsg:
+		if m.focus == focusMemories {
+			return m, m.searchMemories(msg.query)
+		}
 		return m, m.searchHistory(msg.query)
+
+	case memoriesRecalledMessage:
+		return m.handleMemoriesRecalled(msg)
 
 	case tea.MouseWheelMsg:
 		if m.focus == focusChat {
@@ -62,14 +67,17 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handlePickerChosen(msg)
 
 	case pickerDeleteMsg:
+		if m.focus == focusMemories {
+			return m, m.forgetMemory(msg.item)
+		}
 		return m, m.deleteConversation(msg.item)
 
-	case conversationDeletedMessage:
+	case itemDeletedMessage:
 		if msg.err != nil {
 			return m, m.picker.list.NewStatusMessage(m.errorStyle.Render("Could not delete: " + msg.err.Error()))
 		}
 		m.picker.remove(msg.item.id)
-		if m.conversation.Id == msg.item.id {
+		if m.focus == focusHistory && m.conversation.Id == msg.item.id {
 			m.openConversation(model.Conversation{})
 		}
 		return m, m.picker.list.NewStatusMessage("Deleted \"" + msg.item.name + "\"")
@@ -216,8 +224,44 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.streamCtx, m.cancelStream = context.WithCancel(m.ctx)
 	m.toolRounds = 0
 	m.toolTrail = nil
+	m.turn++
+	m.turnMemories = nil
 	m.startWait()
-	return m, tea.Batch(m.callAgent(m.streamCtx, m.conversation.ContextMessages()), m.requestSave(), m.spinner.Tick)
+	start := m.callAgent(m.streamCtx, m.turnContext())
+	if m.memories != nil && m.client.Cfg.Llm.MemoryRecall > 0 {
+		start = m.recallMemories(m.streamCtx, input)
+	}
+	return m, tea.Batch(start, m.requestSave(), m.spinner.Tick)
+}
+
+func (m uiModel) handleMemoriesRecalled(msg memoriesRecalledMessage) (tea.Model, tea.Cmd) {
+	if !m.streaming || msg.turn != m.turn {
+		return m, nil
+	}
+	if m.streamCtx.Err() != nil {
+		return m.handleStreamClosed(streamClosedMessage{})
+	}
+	if msg.err != nil {
+		m.logger.Warn("Could not recall memories", "error", msg.err)
+	}
+	m.turnMemories = msg.memories
+	m.refreshViewport()
+	return m, m.callAgent(m.streamCtx, m.turnContext())
+}
+
+func (m uiModel) turnContext() []model.Message {
+	var context []model.Message
+	if len(m.turnMemories) > 0 {
+		var b strings.Builder
+		b.WriteString("Facts saved about the user in earlier conversations. Use them when relevant; " +
+			"if one turns out wrong, correct it with memory_forget and memory_save.")
+		for _, mem := range m.turnMemories {
+			b.WriteString("\n- " + mem.Content)
+		}
+		context = append(context, model.Message{Role: "system", Content: b.String()})
+	}
+	context = append(context, m.conversation.ContextMessages()...)
+	return append(context, m.toolTrail...)
 }
 
 func (m *uiModel) appendMessage(msg model.Message) {
@@ -274,8 +318,7 @@ func (m uiModel) handleToolsDone(msg toolsDoneMessage) (tea.Model, tea.Cmd) {
 		return m.handleStreamClosed(streamClosedMessage{})
 	}
 	m.refreshViewport()
-	turn := append(slices.Clone(m.conversation.ContextMessages()), m.toolTrail...)
-	return m, m.callAgent(m.streamCtx, turn)
+	return m, m.callAgent(m.streamCtx, m.turnContext())
 }
 
 func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd) {
@@ -387,6 +430,8 @@ func (m *uiModel) handlePickerChosen(msg pickerChosenMsg) {
 			break
 		}
 		m.openConversation(conv)
+	case focusMemories:
+		return
 	}
 	m.focus = focusChat
 }
@@ -398,6 +443,7 @@ func (m *uiModel) openConversation(conv model.Conversation) {
 	m.summarizing = false
 	m.thinkingBuffer.Reset()
 	m.toolTrail = nil
+	m.turnMemories = nil
 	m.refreshViewport()
 	m.viewport.GotoBottom()
 }

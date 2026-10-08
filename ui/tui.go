@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
+	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
@@ -24,6 +25,7 @@ const (
 	focusChat focusState = iota
 	focusModels
 	focusHistory
+	focusMemories
 )
 
 type uiModel struct {
@@ -61,6 +63,9 @@ type uiModel struct {
 	convGen        int
 	toolRounds     int
 	toolTrail      []model.Message
+	memories       *memory.Store
+	turn           int
+	turnMemories   []memory.Memory
 }
 
 type streamEventMessage struct {
@@ -80,7 +85,13 @@ type conversationSavedMessage struct {
 	err          error
 }
 
-type conversationDeletedMessage struct {
+type memoriesRecalledMessage struct {
+	turn     int
+	memories []memory.Memory
+	err      error
+}
+
+type itemDeletedMessage struct {
 	item modelItem
 	err  error
 }
@@ -103,7 +114,7 @@ type conversationRenamedMessage struct {
 	auto    bool
 }
 
-func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher, registry *tools.Registry) uiModel {
+func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher, registry *tools.Registry, memories *memory.Store) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -145,6 +156,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		history:        client,
 		searcher:       searcher,
 		tools:          registry,
+		memories:       memories,
 		ctx:            ctx,
 		logger:         *slog.Default().With("Component", "TUI"),
 	}

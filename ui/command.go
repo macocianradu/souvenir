@@ -97,6 +97,18 @@ func (m uiModel) buildCommands() []command {
 			},
 		},
 		{
+			name:        "memories",
+			description: "Review, search and forget what the assistant remembers",
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
+				if m.memories == nil {
+					m.setErrorMessage("Memory is not available")
+					return m, nil
+				}
+				m.focus = focusMemories
+				return m, m.getMemories()
+			},
+		},
+		{
 			name:        "history",
 			description: "Open conversation history",
 			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {

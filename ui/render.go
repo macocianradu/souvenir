@@ -42,6 +42,10 @@ func (m *uiModel) renderMessages() string {
 	}
 
 	activity := func() {
+		for _, mem := range m.turnMemories {
+			b.WriteString(toolStyle.Width(width).Render("◆ " + truncate(mem.Content, 100)))
+			b.WriteString("\n")
+		}
 		if m.thinkingBuffer.Len() > 0 {
 			thinking()
 		}

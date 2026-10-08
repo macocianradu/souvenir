@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"log/slog"
 
 	"charm.land/bubbles/v2/key"
@@ -26,6 +27,7 @@ type picker struct {
 	searchable bool
 	allItems   []list.Item
 	confirm    *modelItem
+	warning    string
 }
 
 type modelsLoadedMsg struct {
@@ -33,6 +35,7 @@ type modelsLoadedMsg struct {
 	title      string
 	err        error
 	searchable bool
+	warning    string
 }
 type pickerChosenMsg struct{ id string }
 type pickerDismissMsg struct{}
@@ -75,6 +78,10 @@ func (p picker) Update(msg tea.Msg) (picker, tea.Cmd) {
 		p.logger.Debug("Received modelsLoadedMsg", "models", len(msg.models))
 		p.list.Title = msg.title
 		p.searchable = msg.searchable
+		p.warning = msg.warning
+		if p.warning == "" {
+			p.warning = "Delete %q permanently? It cannot be recovered."
+		}
 		p.list.SetFilteringEnabled(!msg.searchable)
 		searchable := msg.searchable
 		p.list.AdditionalShortHelpKeys = func() []key.Binding {
@@ -208,8 +215,7 @@ func (p picker) queryView() string {
 }
 
 func (p picker) confirmView() string {
-	return confirmStyle.Render("Delete \"" + p.confirm.name + "\" permanently? Its messages, summaries " +
-		"and search index are removed and cannot be recovered. y to delete, any other key to cancel.")
+	return confirmStyle.Render(fmt.Sprintf(p.warning, p.confirm.name) + " y to delete, any other key to cancel.")
 }
 
 func (p picker) View() string {

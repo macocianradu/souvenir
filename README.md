@@ -64,8 +64,9 @@ summarizing off.
 ### Terminal UI
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
-fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new` and
-`/rename`. The history browser reopens any past conversation and picks it back
+fuzzy matching. The commands are `/exit`, `/history`, `/memories`, `/models`,
+`/new` and `/rename`. `/memories` lists what the assistant remembers, with the
+same `/` search and `x` to forget as the history browser. The history browser reopens any past conversation and picks it back
 up. `/` in it searches every conversation by keyword and by meaning, Esc
 clearing the search, and `x` (or Delete) on a conversation deletes it, with its messages, summaries
 and search index, after a confirmation, since it cannot be undone. `/rename` asks the title model for a title, and `/rename <title>` sets one
@@ -112,8 +113,10 @@ several handlers at once with their own level, format and target.
 falling back to keywords alone when embeddings are unavailable. It backs
 the `/history` search and the `search_history` tool, but nothing feeds retrieved context
 into a prompt automatically yet.
-Memories are only read when the model asks for them; nothing adds them to the
-context automatically yet.
+On every message the top `Llm.MemoryRecall` memories (default 5, 0 turns it
+off) are found with the same search and given to the model ahead of the
+conversation. Like tool rounds they are working state for the turn: shown faded
+above the answer, never saved into the history.
 
 ## Planned
 
@@ -144,9 +147,7 @@ miss and quietly costs recall.
 
 ### Memory
 
-The memory store and its tools are in place (see Chat above). Next: the most
-relevant memories added to the context on every turn, and a `/memories` command
-to review and delete them.
+Memory is in place (see Chat above).
 
 ### Tools
 
@@ -214,7 +215,8 @@ terminal, so an entry without a target writes to `souvenir.log`.
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
   "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false,
-                 "MaxToolRounds": 28, "ContextBudget": 12000, "KeepRecent": 8 },
+                 "MaxToolRounds": 28, "ContextBudget": 12000, "KeepRecent": 8,
+                 "MemoryRecall": 5 },
   "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
                  "User": "...", "Password": "...",
                  "ChunkSize": 400, "ChunkOverlap": 40 },
