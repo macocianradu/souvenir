@@ -35,7 +35,11 @@ only the final reply is saved, so a reopened conversation sends exactly what a
 live one does; the cost is that the model reruns a lookup it needs again later.
 Tools live in a registry mapping a name to a Go function and a JSON schema, and
 return a plain string so the packages behind them never import the API types.
-Esc cancels a running tool. No tools are registered yet.
+Esc cancels a running tool.
+
+The one tool so far is `search_history`, which runs the same hybrid search as
+`/search` over every other conversation and returns the matching messages with
+their conversation and date, so the model can look up what was said before.
 
 Conversations get a title and a summary from a single cheap-model call, using a
 separate model if you configure one. It runs in the background after the first
@@ -89,7 +93,8 @@ several handlers at once with their own level, format and target.
 `db/search` runs hybrid search: cosine distance over the vector table and
 `websearch_to_tsquery` over the text index, merged with reciprocal rank fusion,
 falling back to keywords alone when embeddings are unavailable. It backs
-`/search`, but nothing feeds retrieved context into a prompt yet.
+`/search` and the `search_history` tool, but nothing feeds retrieved context
+into a prompt automatically yet.
 `db/memory` is an empty package waiting for the memory store.
 
 ## Planned
@@ -130,8 +135,8 @@ own memory as it goes.
 
 ### Tools
 
-The loop is in place (see Chat above); the tools themselves are next, starting
-with searching past conversations. Tools are exposed through the API's native tool calling. MCP would only be worth
+The loop and `search_history` are in place (see Chat above); memory, web and
+calendar tools follow. Tools are exposed through the API's native tool calling. MCP would only be worth
 the transport layer if these tools needed to be reachable from other clients,
 and they do not, since they live in the same binary.
 

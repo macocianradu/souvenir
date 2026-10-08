@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/db/embed"
 	"github.com/jackc/pgx/v5"
@@ -20,12 +21,15 @@ type Hit struct {
 	Seq               int
 	Role              string
 	Snippet           string
+	Content           string
+	CreatedAt         time.Time
 	Score             float64
 }
 
 type Options struct {
-	ConversationId string
-	Limit          int
+	ConversationId        string
+	ExcludeConversationId string
+	Limit                 int
 }
 
 type Searcher struct {
@@ -47,12 +51,7 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 		opts.Limit = 20
 	}
 	candidates := max(opts.Limit*4, 50)
-	var conversation *string
-	if opts.ConversationId != "" {
-		conversation = &opts.ConversationId
-	}
-
-	args := []any{query, conversation, candidates, opts.Limit}
+	args := []any{query, nullable(opts.ConversationId), candidates, opts.Limit, nullable(opts.ExcludeConversationId)}
 	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank WHERE false`
 	if s.store != nil {
 		vec, err := s.store.EmbedQuery(ctx, query)
@@ -65,18 +64,19 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 				  FROM (
 					  SELECT message_id, distance, min(distance) OVER () AS best
 					    FROM (
-					  SELECT mc.message_id, min(v.embedding <=> $5) AS distance
+					  SELECT mc.message_id, min(v.embedding <=> $6) AS distance
 					    FROM %s v
 					    JOIN message_chunks mc
 					      ON mc.id = v.chunk_id AND mc.content_hash = v.content_hash
-					   WHERE $2::uuid IS NULL OR mc.conversation_id = $2
+					   WHERE ($2::uuid IS NULL OR mc.conversation_id = $2)
+					     AND ($5::uuid IS NULL OR mc.conversation_id <> $5)
 					GROUP BY mc.message_id
-					  HAVING $6::float8 = 0 OR min(v.embedding <=> $5) <= $6
+					  HAVING $7::float8 = 0 OR min(v.embedding <=> $6) <= $7
 					ORDER BY distance
 					   LIMIT $3
 					    ) nearest
 				  ) scored
-				 WHERE $7::float8 = 0 OR distance <= best + $7`, s.store.TableName())
+				 WHERE $8::float8 = 0 OR distance <= best + $8`, s.store.TableName())
 		}
 	}
 
@@ -87,6 +87,7 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 			 WHERE m.tsv @@ q
 			   AND m.role IN ('user', 'assistant')
 			   AND ($2::uuid IS NULL OR m.conversation_id = $2)
+			   AND ($5::uuid IS NULL OR m.conversation_id <> $5)
 			 ORDER BY rank
 			 LIMIT $3
 		),
@@ -99,7 +100,7 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 		  SELECT m.conversation_id, COALESCE(c.title, ''), m.id, m.seq, m.role,
 		         ts_headline('english', m.content, websearch_to_tsquery('english', $1),
 		                     'MaxFragments=2, MinWords=5, MaxWords=20, StartSel=«, StopSel=»'),
-		         f.score
+		         m.content, m.created_at, f.score
 		    FROM fused f
 		    JOIN messages m ON m.id = f.id
 		    JOIN conversations c ON c.id = m.conversation_id
@@ -112,7 +113,7 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 	}
 	hits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Hit, error) {
 		var h Hit
-		err := row.Scan(&h.ConversationId, &h.ConversationTitle, &h.MessageId, &h.Seq, &h.Role, &h.Snippet, &h.Score)
+		err := row.Scan(&h.ConversationId, &h.ConversationTitle, &h.MessageId, &h.Seq, &h.Role, &h.Snippet, &h.Content, &h.CreatedAt, &h.Score)
 		return h, err
 	})
 	if err != nil {
@@ -120,4 +121,11 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 		return nil, err
 	}
 	return hits, nil
+}
+
+func nullable(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
 }

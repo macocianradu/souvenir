@@ -38,7 +38,7 @@ func main() {
 	store := startEmbedding(ctx, config, pool, logger)
 	searcher := search.New(pool, store)
 
-	registry := tools.NewRegistry()
+	registry := tools.NewRegistry(tools.SearchHistory(searcher))
 
 	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry))
 	if _, err := p.Run(); err != nil {

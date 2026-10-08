@@ -8,6 +8,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
 func (m uiModel) callAgent(ctx context.Context, messages []model.Message) tea.Cmd {
@@ -23,6 +24,7 @@ func (m uiModel) callAgent(ctx context.Context, messages []model.Message) tea.Cm
 }
 
 func (m uiModel) runTools(ctx context.Context, calls []model.ToolCall) tea.Cmd {
+	ctx = tools.WithConversation(ctx, m.conversation.Id)
 	return func() tea.Msg {
 		var results []model.Message
 		for _, call := range calls {
