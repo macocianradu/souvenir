@@ -92,6 +92,12 @@ func (m uiModel) summarizeConversation() tea.Cmd {
 	}
 }
 
+func (m uiModel) deleteConversation(item modelItem) tea.Cmd {
+	return func() tea.Msg {
+		return conversationDeletedMessage{item: item, err: m.history.DeleteConversation(m.ctx, item.id)}
+	}
+}
+
 func (m uiModel) getModels() tea.Cmd {
 	m.logger.Debug("Querying models")
 	return func() tea.Msg {
@@ -148,6 +154,6 @@ func (m uiModel) getHistory() tea.Cmd {
 			}
 			items = append(items, modelItem{id: conv.Id, name: name, description: conv.Summary})
 		}
-		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off"}
+		return modelsLoadedMsg{models: items, title: "Select a conversation to continue from where you left off", deletable: true}
 	}
 }

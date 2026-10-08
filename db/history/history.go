@@ -86,6 +86,18 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	return conv, nil
 }
 
+func (cl DbClient) DeleteConversation(ctx context.Context, id string) error {
+	tag, err := cl.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1`, id)
+	if err != nil {
+		cl.logger.Error("Could not delete conversation", "id", id, "error", err)
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("conversation %s not found", id)
+	}
+	return nil
+}
+
 func (cl DbClient) SaveContextSummary(ctx context.Context, conversationId string, summary model.ContextSummary) error {
 	_, err := cl.pool.Exec(ctx,
 		`

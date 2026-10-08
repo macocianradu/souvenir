@@ -81,6 +81,11 @@ type conversationSavedMessage struct {
 	err          error
 }
 
+type conversationDeletedMessage struct {
+	item modelItem
+	err  error
+}
+
 type summarizedMessage struct {
 	summary *model.ContextSummary
 	err     error

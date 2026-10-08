@@ -58,6 +58,19 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pickerChosenMsg:
 		m.handlePickerChosen(msg)
 
+	case pickerDeleteMsg:
+		return m, m.deleteConversation(msg.item)
+
+	case conversationDeletedMessage:
+		if msg.err != nil {
+			return m, m.picker.list.NewStatusMessage(m.errorStyle.Render("Could not delete: " + msg.err.Error()))
+		}
+		m.picker.remove(msg.item.id)
+		if m.conversation.Id == msg.item.id {
+			m.openConversation(model.Conversation{})
+		}
+		return m, m.picker.list.NewStatusMessage("Deleted \"" + msg.item.name + "\"")
+
 	case pickerDismissMsg:
 		m.focus = focusChat
 

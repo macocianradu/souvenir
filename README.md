@@ -59,7 +59,8 @@ summarizing off.
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
 fuzzy matching. The commands are `/exit`, `/history`, `/models`, `/new`,
 `/rename` and `/search`. The history browser reopens any past conversation and picks it back
-up. `/rename` asks the title model for a title, and `/rename <title>` sets one
+up; `x` (or Delete) on a conversation deletes it, with its messages, summaries
+and search index, after a confirmation, since it cannot be undone. `/rename` asks the title model for a title, and `/rename <title>` sets one
 by hand. `/search <text>` searches every conversation and opens the one you
 pick.
 
