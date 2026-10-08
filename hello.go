@@ -12,11 +12,11 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/db/embed"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
+	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -35,10 +35,24 @@ func main() {
 	}
 	defer pool.Close()
 	historyClient := history.New(pool, config.Db)
-	store := startEmbedding(ctx, config, pool, logger)
+
+	embedder := llm.NewEmbedder(config.Embedding)
+	store, err := embed.NewEmbedStore(ctx, pool, config.Db.DbName, *embedder)
+	if err != nil {
+		logger.Error("Embedding disabled", "error", err)
+		embedder = nil
+	}
+	memories, err := memory.NewStore(ctx, pool, embedder)
+	if err != nil {
+		logger.Error("Memory embedding disabled", "error", err)
+		memories, _ = memory.NewStore(ctx, pool, nil)
+	}
+	if store != nil {
+		go runEmbedding(ctx, config, store, memories, logger)
+	}
 	searcher := search.New(pool, store)
 
-	registry := tools.NewRegistry(tools.SearchHistory(searcher))
+	registry := tools.NewRegistry(append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)...)
 
 	p := tea.NewProgram(ui.InitialModel(ctx, *config, *historyClient, searcher, registry))
 	if _, err := p.Run(); err != nil {
@@ -46,43 +60,32 @@ func main() {
 	}
 }
 
+func runEmbedding(ctx context.Context, cfg *config.Config, store *embed.EmbedStore, memories *memory.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Duration(cfg.Embedding.Interval) * time.Minute)
+	defer ticker.Stop()
+	for {
+		convs, err := store.GetConversationsToEmbed(ctx, cfg.Embedding.Quiet)
+		if err != nil {
+			logger.Error("Could not get conversations to embed", "error", err)
+		}
+		for _, conv := range convs {
+			if err := store.EmbedConversation(ctx, conv); err != nil {
+				logger.Error("Could not embed conversation", "conversation_id", conv, "error", err)
+			}
+		}
+		if err := memories.Backfill(ctx); err != nil {
+			logger.Error("Could not embed memories", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func fatal(msg string, err error) {
 	slog.Error(msg, "error", err)
 	fmt.Fprintf(os.Stderr, "%s: %v\n", msg, err)
 	os.Exit(1)
-}
-
-func startEmbedding(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *embed.EmbedStore {
-	embedder := llm.NewEmbedder(cfg.Embedding)
-	store, err := embed.NewEmbedStore(ctx, pool, cfg.Db.DbName, *embedder)
-	if err != nil {
-		logger.Error("Embedding disabled", "error", err)
-		return nil
-	}
-	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.Embedding.Interval) * time.Minute)
-		defer ticker.Stop()
-		for {
-			runEmbedding(ctx, store, cfg.Embedding.Quiet, logger)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return store
-}
-
-func runEmbedding(ctx context.Context, em *embed.EmbedStore, quietMinutes int, logger *slog.Logger) {
-	convs, err := em.GetConversationsToEmbed(ctx, quietMinutes)
-	if err != nil {
-		logger.Error("Could not get conversations to embed", "error", err)
-		return
-	}
-	for _, conv := range convs {
-		if err := em.EmbedConversation(ctx, conv); err != nil {
-			logger.Error("Could not embed conversation", "conversation_id", conv, "error", err)
-		}
-	}
 }

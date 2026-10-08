@@ -37,9 +37,16 @@ Tools live in a registry mapping a name to a Go function and a JSON schema, and
 return a plain string so the packages behind them never import the API types.
 Esc cancels a running tool.
 
-The one tool so far is `search_history`, which runs the same hybrid search as
-the `/history` search over every other conversation and returns the matching messages with
-their conversation and date, so the model can look up what was said before.
+`search_history` runs the same hybrid search as the `/history` search over every
+other conversation and returns the matching messages with their conversation
+and date, so the model can look up what was said before.
+
+Memory is a separate table of durable facts ("The user is vegetarian"), not
+transcript. The model curates it with `memory_save`, `memory_search` and
+`memory_forget`; saving the same text twice returns the existing memory.
+Memories get the same per-model vector tables and hybrid search as messages,
+are embedded as soon as they are saved, and are backfilled by the background
+pass if that failed.
 
 Conversations get a title and a summary from a single cheap-model call, using a
 separate model if you configure one. It runs in the background after the first
@@ -105,7 +112,8 @@ several handlers at once with their own level, format and target.
 falling back to keywords alone when embeddings are unavailable. It backs
 the `/history` search and the `search_history` tool, but nothing feeds retrieved context
 into a prompt automatically yet.
-`db/memory` is an empty package waiting for the memory store.
+Memories are only read when the model asks for them; nothing adds them to the
+context automatically yet.
 
 ## Planned
 
@@ -136,12 +144,9 @@ miss and quietly costs recall.
 
 ### Memory
 
-A memory table separate from history, holding curated durable facts rather than
-raw transcript. Same per-model vector tables and same hash-driven backfill as
-the message chunks.
-
-Reading, writing and searching memory become tools, so the assistant curates its
-own memory as it goes.
+The memory store and its tools are in place (see Chat above). Next: the most
+relevant memories added to the context on every turn, and a `/memories` command
+to review and delete them.
 
 ### Tools
 

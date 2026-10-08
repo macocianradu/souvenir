@@ -71,6 +71,17 @@ var migrations = []string{
 		PRIMARY KEY (conversation_id, through_seq)
 	);
 	`,
+	`
+	CREATE TABLE memories (
+		id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		content                TEXT NOT NULL,
+		content_hash           TEXT NOT NULL UNIQUE,
+		source_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+		created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+		tsv                    TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+	);
+	CREATE INDEX memories_tsv_idx ON memories USING gin (tsv);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {
