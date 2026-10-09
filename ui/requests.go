@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
@@ -99,10 +100,14 @@ func (m uiModel) deleteConversation(item modelItem) tea.Cmd {
 	}
 }
 
+const recallTimeout = 3 * time.Second
+
 func (m uiModel) recallMemories(ctx context.Context, query string) tea.Cmd {
 	turn := m.turn
 	limit := m.client.Cfg.Llm.MemoryRecall
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, recallTimeout)
+		defer cancel()
 		found, err := m.memories.Search(ctx, query, limit)
 		return memoriesRecalledMessage{turn: turn, memories: found, err: err}
 	}

@@ -9,9 +9,9 @@ services:
       SOUV__db__dbName: souvenir
       SOUV__db__user: souvenir
       SOUV__db__password: ${SOUVENIR_DB_PASSWORD:?set the SOUVENIR_DB_PASSWORD secret}
-      SOUV__api__url: https://openrouter.ai/api
+      SOUV__api__url: https://api.mistral.ai
       SOUV__api__key: ${SOUVENIR_API_KEY:?set the SOUVENIR_API_KEY secret}
-      SOUV__llm__model: qwen/qwen3.6-flash
+      SOUV__llm__model: mistral-small-latest
       SOUV__embedding__url: http://embeddings:8080
       SOUV__embedding__model: Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0
       SOUV__embedding__dim: "1024"

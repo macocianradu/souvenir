@@ -2,7 +2,7 @@
 
 A small, self-hosted personal AI chat application with persistent memory and
 searchable history. It talks to any OpenAI-compatible endpoint, so the same
-binary works against a local `llama.cpp` server, OpenRouter, or OpenAI.
+binary works against a local `llama.cpp` server, OpenRouter, Mistral or OpenAI.
 
 Written in Go to keep the footprint small: one static binary, with Postgres and
 `pgvector` as the only dependency. No separate vector database.
@@ -304,7 +304,7 @@ One-time setup:
    ```
 
 2. Add the repository secrets `SOUVENIR_DB_PASSWORD`, `SOUVENIR_API_KEY` (the
-   OpenRouter key) and `SOUVENIR_AUTHORIZED_KEYS` (one OpenSSH public key per
+   Mistral API key) and `SOUVENIR_AUTHORIZED_KEYS` (one OpenSSH public key per
    line; rewritten into the volume on every start, so change the secret and
    redeploy to add or remove a key).
 
