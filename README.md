@@ -281,6 +281,48 @@ ssh -p 23234 localhost
          "AuthorizedKeys": "authorized_keys" }
 ```
 
+## Deploying
+
+Pushing a `v*` tag (`git tag v0.1.0 && git push --tags`) runs
+`.gitea/workflows/release.yml` on the Gitea runner: it builds the image on the
+server's Docker and replaces the container with `docker-compose.yml`. The
+container runs `souvenir serve`, configured entirely through `SOUV__*`
+variables, logging to stdout, and keeping its SSH host key and
+`authorized_keys` in the `souvenir_data` volume.
+
+One-time setup:
+
+1. Create the role and database on the shared Postgres:
+
+   ```sh
+   docker exec -it postgres psql -U postgres
+   ```
+   ```sql
+   CREATE USER souvenir WITH PASSWORD '...';
+   CREATE DATABASE souvenir OWNER souvenir;
+   REVOKE ALL ON DATABASE postgres FROM souvenir;
+   ```
+
+2. Add the repository secrets `SOUVENIR_DB_PASSWORD`, `SOUVENIR_API_KEY` (the
+   OpenRouter key) and `SOUVENIR_AUTHORIZED_KEYS` (one OpenSSH public key per
+   line; rewritten into the volume on every start, so change the secret and
+   redeploy to add or remove a key).
+
+3. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
+   `ssh-souvenir.macocian.com` to `ssh://localhost:2223`, and on the client:
+
+   ```
+   Host ssh-souvenir.macocian.com
+       ProxyCommand /usr/bin/cloudflared access ssh --hostname %h
+   ```
+
+Embeddings come from a llama.cpp server running Qwen3-Embedding-0.6B at
+`http://embeddings:8080` (started with `--embeddings --pooling last`), which
+reached over the external `llm-network`. They also need
+pgvector in the database: until the Postgres image has it and
+`CREATE EXTENSION vector` has been run in `souvenir` as the superuser, the app
+logs "Embedding disabled" and search uses keywords only.
+
 ## License
 
 See [LICENSE](LICENSE).

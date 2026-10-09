@@ -1,0 +1,62 @@
+name: Release
+
+# A release is a version tag: `git tag v0.1.0 && git push --tags`. The image is
+# built on the server's Docker and the container replaced in place.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - name: Checkout code
+        run: |
+          git clone --depth 1 --branch ${{ gitea.ref_name }} http://gitea-actions:${{ gitea.token }}@gitea:3030/${{ gitea.repository }}.git .
+
+      - name: Work out the version
+        run: |
+          version="${{ gitea.ref_name }}"
+          version="${version#v}"
+          case "$version" in
+            [0-9]*) ;;
+            *) echo "Run this from a v* tag, not '${{ gitea.ref_name }}'"; exit 1 ;;
+          esac
+          echo "VERSION=$version" >> "$GITEA_ENV"
+
+      # Secrets are read by the step that uses them: the runner leaves them empty,
+      # without failing, when they are referenced from a job-level env.
+      - name: Check secrets
+        env:
+          SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
+          SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
+          SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
+        run: |
+          missing=""
+          [ -n "$SOUVENIR_DB_PASSWORD" ] || missing="$missing SOUVENIR_DB_PASSWORD"
+          [ -n "$SOUVENIR_API_KEY" ] || missing="$missing SOUVENIR_API_KEY"
+          [ -n "$SOUVENIR_AUTHORIZED_KEYS" ] || missing="$missing SOUVENIR_AUTHORIZED_KEYS"
+          [ -z "$missing" ] || { echo "Missing secrets:$missing"; exit 1; }
+
+      - name: Build image
+        run: docker build -t "souvenir:$VERSION" .
+
+      - name: Set image tag in docker-compose.yml
+        run: sed -i "s/#{image_tag}#/$VERSION/g" ./docker-compose.yml
+
+      - name: Deploy
+        env:
+          SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
+          SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
+          SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
+        run: docker compose -p souvenir -f ./docker-compose.yml up -d
+
+      - name: Prune old images
+        run: |
+          docker image ls souvenir --format '{{.Repository}}:{{.Tag}}' \
+            | grep -v "^souvenir:$VERSION$" \
+            | xargs -r docker rmi -f || true

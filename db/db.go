@@ -2,11 +2,13 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,6 +32,14 @@ func Open(ctx context.Context, cfg config.DbConfig) (*pgxpool.Pool, error) {
 }
 
 func ensureDatabase(ctx context.Context, cfg config.DbConfig, logger *slog.Logger) error {
+	if conn, err := pgx.Connect(ctx, cfg.ConnectionString()); err == nil {
+		conn.Close(ctx)
+		logger.Debug("Database already exists", "name", cfg.DbName)
+		return nil
+	} else if pgErr, ok := errors.AsType[*pgconn.PgError](err); !ok || pgErr.Code != "3D000" {
+		return err
+	}
+
 	maintenance := cfg
 	maintenance.DbName = "postgres"
 	conn, err := pgx.Connect(ctx, maintenance.ConnectionString())

@@ -1,0 +1,39 @@
+services:
+  souvenir:
+    container_name: souvenir
+    image: souvenir:#{image_tag}#
+    restart: unless-stopped
+    environment:
+      SOUV__db__url: postgres
+      SOUV__db__port: "5432"
+      SOUV__db__dbName: souvenir
+      SOUV__db__user: souvenir
+      SOUV__db__password: ${SOUVENIR_DB_PASSWORD:?set the SOUVENIR_DB_PASSWORD secret}
+      SOUV__api__url: https://openrouter.ai/api
+      SOUV__api__key: ${SOUVENIR_API_KEY:?set the SOUVENIR_API_KEY secret}
+      SOUV__llm__model: qwen/qwen3.6-flash
+      SOUV__embedding__url: http://embeddings:8080
+      SOUV__embedding__model: Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0
+      SOUV__embedding__dim: "1024"
+      SOUV__embedding__batchSize: "8"
+      SOUV__embedding__timeout: "120000"
+      SOUV__embedding__queryPrefix: "Instruct: Given a search query, retrieve relevant passages\nQuery: "
+      AUTHORIZED_KEYS: ${SOUVENIR_AUTHORIZED_KEYS:?set the SOUVENIR_AUTHORIZED_KEYS secret}
+    volumes:
+      - souvenir_data:/data
+    ports:
+      - "2223:23234"
+    networks:
+      - db-network
+      - llm-network
+
+volumes:
+  souvenir_data:
+
+networks:
+  db-network:
+    name: db-network
+    external: true
+  llm-network:
+    name: llm-network
+    external: true

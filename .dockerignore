@@ -1,0 +1,9 @@
+.git
+.gitea
+.config.json
+.ssh
+authorized_keys
+*.log
+REVIEW.md
+Dockerfile
+docker-compose.yml
