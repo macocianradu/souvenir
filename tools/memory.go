@@ -17,7 +17,9 @@ func MemoryTools(store *memory.Store) []Tool {
 			Description: "Save a durable fact for future conversations: the user's preferences, personal details, " +
 				"people and places in their life, ongoing projects and decisions. One self-contained fact per call, " +
 				"written in the third person (\"The user is vegetarian\"). Do not save small talk or things that only " +
-				"matter in this conversation. Search first to avoid saving what is already known.",
+				"matter in this conversation. If what the user says refines or replaces a fact already remembered " +
+				"(a date added, a new job, a changed preference), use memory_update on that memory instead of " +
+				"saving a second one; search first when unsure.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {"content": {"type": "string", "description": "The fact, as one self-contained sentence"}},
@@ -85,9 +87,39 @@ func MemoryTools(store *memory.Store) []Tool {
 			},
 		},
 		{
+			Name: "memory_update",
+			Description: "Rewrite a saved memory when new information refines, corrects or replaces it, keeping " +
+				"one fact instead of two. The new content replaces the old completely, so include everything that " +
+				"still holds (\"The user works at Odoo\" becomes \"The user has worked at Odoo since September 2025\").",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "The memory id, from the recalled memories or memory_search"},
+					"content": {"type": "string", "description": "The complete new fact"}
+				},
+				"required": ["id", "content"]
+			}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args struct {
+					Id      string `json:"id"`
+					Content string `json:"content"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return "", err
+				}
+				if strings.TrimSpace(args.Content) == "" {
+					return "", errors.New("content is required")
+				}
+				if _, err := store.Update(ctx, args.Id, args.Content); err != nil {
+					return "", err
+				}
+				return "Updated.", nil
+			},
+		},
+		{
 			Name: "memory_forget",
-			Description: "Delete a saved memory by its id, when the user asks you to forget it or it turned out " +
-				"wrong or outdated. Find the id with memory_search. To correct a fact, forget it and save the new one.",
+			Description: "Delete a saved memory by its id, when the user asks you to forget it or it no longer " +
+				"holds at all. To correct or refine a memory, use memory_update instead.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {"id": {"type": "string", "description": "The memory id from memory_search"}},

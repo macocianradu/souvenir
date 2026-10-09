@@ -42,8 +42,10 @@ other conversation and returns the matching messages with their conversation
 and date, so the model can look up what was said before.
 
 Memory is a separate table of durable facts ("The user is vegetarian"), not
-transcript. The model curates it with `memory_save`, `memory_search` and
-`memory_forget`; saving the same text twice returns the existing memory.
+transcript. The model curates it with `memory_save`, `memory_search`,
+`memory_update` and `memory_forget`: recalled memories carry their ids, so a fact
+the user refines ("since September 2025") is rewritten in place rather than
+saved again, and saving the same text twice returns the existing memory.
 Memories get the same per-model vector tables and hybrid search as messages,
 are embedded as soon as they are saved, and are backfilled by the background
 pass if that failed.

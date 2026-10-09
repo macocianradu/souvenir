@@ -253,10 +253,11 @@ func (m uiModel) turnContext() []model.Message {
 	var context []model.Message
 	if len(m.turnMemories) > 0 {
 		var b strings.Builder
-		b.WriteString("Facts saved about the user in earlier conversations. Use them when relevant; " +
-			"if one turns out wrong, correct it with memory_forget and memory_save.")
+		b.WriteString("Facts saved about the user in earlier conversations, with their ids. Use them when " +
+			"relevant. When the user says something that refines, corrects or replaces one of them, call " +
+			"memory_update with its id rather than saving a new memory.")
 		for _, mem := range m.turnMemories {
-			b.WriteString("\n- " + mem.Content)
+			b.WriteString("\n- [" + mem.Id + "] " + mem.Content)
 		}
 		context = append(context, model.Message{Role: "system", Content: b.String()})
 	}

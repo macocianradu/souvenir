@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 )
@@ -76,6 +78,32 @@ func (s *Store) Save(ctx context.Context, content, conversationId string) (Memor
 		}
 	}
 	return m, created, nil
+}
+
+func (s *Store) Update(ctx context.Context, id, content string) (Memory, error) {
+	content = strings.TrimSpace(content)
+	hash := sha256.Sum256([]byte(content))
+	var m Memory
+	err := s.pool.QueryRow(ctx,
+		`
+		   UPDATE memories
+		      SET content = $2, content_hash = $3
+		    WHERE id = $1
+		RETURNING id, content, created_at
+		`, id, content, hex.EncodeToString(hash[:])).Scan(&m.Id, &m.Content, &m.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return m, fmt.Errorf("no memory with id %s", id)
+	}
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return m, errors.New("another memory already says exactly that; forget this one instead")
+	}
+	if err != nil {
+		return m, err
+	}
+	if err := s.Backfill(ctx); err != nil {
+		s.logger.Warn("Memory updated without a fresh vector for now", "id", m.Id, "error", err)
+	}
+	return m, nil
 }
 
 func (s *Store) Forget(ctx context.Context, id string) error {
