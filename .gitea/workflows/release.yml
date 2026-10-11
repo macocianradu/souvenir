@@ -28,21 +28,16 @@ jobs:
           esac
           echo "VERSION=$version" >> "$GITEA_ENV"
 
-      # Secrets are read by the step that uses them: the runner leaves them empty,
-      # without failing, when they are referenced from a job-level env.
-      - name: Check secrets
+      - name: Install sops
         env:
-          SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
-          SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
-          SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
-          SOUVENIR_CALENDARS_DIR: ${{ vars.SOUVENIR_CALENDARS_DIR }}
+          SOPS_VERSION: v3.13.3
         run: |
-          missing=""
-          [ -n "$SOUVENIR_DB_PASSWORD" ] || missing="$missing SOUVENIR_DB_PASSWORD"
-          [ -n "$SOUVENIR_API_KEY" ] || missing="$missing SOUVENIR_API_KEY"
-          [ -n "$SOUVENIR_AUTHORIZED_KEYS" ] || missing="$missing SOUVENIR_AUTHORIZED_KEYS"
-          [ -n "$SOUVENIR_CALENDARS_DIR" ] || missing="$missing SOUVENIR_CALENDARS_DIR"
-          [ -z "$missing" ] || { echo "Missing secrets or variables:$missing"; exit 1; }
+          base="https://github.com/getsops/sops/releases/download/$SOPS_VERSION"
+          curl -fsSLo sops "$base/sops-$SOPS_VERSION.linux.amd64"
+          curl -fsSLo sops.checksums.txt "$base/sops-$SOPS_VERSION.checksums.txt"
+          echo "$(grep " sops-$SOPS_VERSION.linux.amd64\$" sops.checksums.txt | cut -d' ' -f1)  sops" | sha256sum -c
+          install -m 755 sops /usr/local/bin/sops
+          rm sops sops.checksums.txt
 
       - name: Build image
         run: docker build -t "souvenir:$VERSION" .
@@ -50,16 +45,14 @@ jobs:
       - name: Set image tag in docker-compose.yml
         run: sed -i "s/#{image_tag}#/$VERSION/g" ./docker-compose.yml
 
+      # exec-env hands the decrypted values to compose as environment variables,
+      # so no plaintext .env is written to the runner's disk.
       - name: Deploy
         env:
-          SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
-          SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
-          SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
-          SOUVENIR_CALENDARS_DIR: ${{ vars.SOUVENIR_CALENDARS_DIR }}
-          SOUVENIR_CALENDARS_READ: ${{ vars.SOUVENIR_CALENDARS_READ }}
-          SOUVENIR_CALENDARS_WRITE: ${{ vars.SOUVENIR_CALENDARS_WRITE }}
-          SOUVENIR_CALENDARS_TIMEZONE: ${{ vars.SOUVENIR_CALENDARS_TIMEZONE }}
-        run: docker compose -p souvenir -f ./docker-compose.yml up -d
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          [ -n "$SOPS_AGE_KEY" ] || { echo "Missing secret: SOPS_AGE_KEY"; exit 1; }
+          sops exec-env secrets.enc.env 'docker compose -p souvenir -f ./docker-compose.yml up -d'
 
       - name: Prune old images
         run: |

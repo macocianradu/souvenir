@@ -315,20 +315,34 @@ One-time setup:
    REVOKE ALL ON DATABASE postgres FROM souvenir;
    ```
 
-2. Add the repository secrets `SOUVENIR_DB_PASSWORD`, `SOUVENIR_API_KEY` (the
-   Mistral API key) and `SOUVENIR_AUTHORIZED_KEYS` (one OpenSSH public key per
-   line; rewritten into the volume on every start, so change the secret and
-   redeploy to add or remove a key).
+2. Secrets are kept in `secrets.enc.env`, encrypted with SOPS to the same age
+   key as the docker repo (`.sops.yaml`). Write them to a `.env` (gitignored),
+   one `KEY=value` per line without quotes, and encrypt it:
 
-3. Add the repository variables for the calendars: `SOUVENIR_CALENDARS_DIR`
-   (required), the host directory `vdirsyncer` syncs into, mounted at
-   `/calendars`; and `SOUVENIR_CALENDARS_READ`, `SOUVENIR_CALENDARS_WRITE`
-   (comma separated calendar names) and `SOUVENIR_CALENDARS_TIMEZONE`, which
-   map to the `Calendars` keys. With no names set, no calendar tools are
-   offered. The container runs as uid 10001, which needs write access to the
-   `Write` calendars.
+   ```sh
+   sops encrypt --input-type dotenv --output-type dotenv .env > secrets.enc.env
+   ```
 
-4. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
+   Edit them later with `sops secrets.enc.env`.
+
+   | Secret | |
+   |---|---|
+   | `DB_PASSWORD` | `Db.Password` |
+   | `API_KEY` | `Api.Key`, the Mistral API key |
+   | `EMBEDDING_KEY` | `Embedding.Key`; optional, leave out for a server that needs none |
+   | `AUTHORIZED_KEYS` | OpenSSH public keys separated by `\n`, rewritten into the volume on every start: change it and redeploy to add or remove a key |
+
+   The workflow decrypts them with the age private key, stored as the Gitea
+   repository secret `SOPS_AGE_KEY` (the `AGE-SECRET-KEY-...` line of
+   `~/.config/sops/age/keys.txt`), and hands them to `docker compose` as
+   environment variables without writing them to disk. Everything else is set
+   in `docker-compose.yml`, which only lists what differs from the defaults.
+
+   The calendars are mounted from the `calendar` service's data directory. The
+   container runs as uid 1000, the owner of the synced files, so it can write
+   the `Write` calendars.
+
+3. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
    `ssh-souvenir.macocian.com` to `ssh://localhost:2223`, and on the client:
 
    ```
@@ -336,12 +350,11 @@ One-time setup:
        ProxyCommand /usr/bin/cloudflared access ssh --hostname %h
    ```
 
-Embeddings come from a llama.cpp server running Qwen3-Embedding-0.6B at
-`http://embeddings:8080` (started with `--embeddings --pooling last`), which
-reached over the external `llm-network`. They also need
-pgvector in the database: until the Postgres image has it and
-`CREATE EXTENSION vector` has been run in `souvenir` as the superuser, the app
-logs "Embedding disabled", message search uses keywords only and memory
+The embedding server is a llama.cpp server (started with `--embeddings
+--pooling last` for Qwen3-Embedding) reached over the external `llm-network`.
+Embeddings also need pgvector in the database: until the Postgres image has it
+and `CREATE EXTENSION vector` has been run in the database as the superuser,
+the app logs "Embedding disabled", message search uses keywords only and memory
 search is unavailable.
 
 ## License
