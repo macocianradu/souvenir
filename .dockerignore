@@ -6,4 +6,3 @@ authorized_keys
 *.log
 REVIEW.md
 Dockerfile
-docker-compose.yml

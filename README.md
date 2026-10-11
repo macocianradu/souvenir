@@ -296,66 +296,18 @@ ssh -p 23234 localhost
 ## Deploying
 
 Pushing a `v*` tag (`git tag v0.1.0 && git push --tags`) runs
-`.gitea/workflows/release.yml` on the Gitea runner: it builds the image on the
-server's Docker and replaces the container with `docker-compose.yml`. The
-container runs `souvenir serve`, configured entirely through `SOUV__*`
-variables, logging to stdout, and keeping its SSH host key and
-`authorized_keys` in the `souvenir_data` volume.
+`.gitea/workflows/release.yml`: it builds the image, pushes it to the Gitea
+registry as `radumaco/souvenir:<version>`, and commits that version to the
+`souvenir-deploy` repository, whose own workflow redeploys. The
+compose file, the secrets and the one-time setup live there.
 
-One-time setup:
+The image runs `souvenir serve` as uid 1000, configured entirely through
+`SOUV__*` variables, logging to stdout, with its SSH host key and
+`authorized_keys` under `/data`.
 
-1. Create the role and database on the shared Postgres:
-
-   ```sh
-   docker exec -it postgres psql -U postgres
-   ```
-   ```sql
-   CREATE USER souvenir WITH PASSWORD '...';
-   CREATE DATABASE souvenir OWNER souvenir;
-   REVOKE ALL ON DATABASE postgres FROM souvenir;
-   ```
-
-2. Secrets are kept in `secrets.enc.env`, encrypted with SOPS to the same age
-   key as the docker repo (`.sops.yaml`). Write them to a `.env` (gitignored),
-   one `KEY=value` per line without quotes, and encrypt it:
-
-   ```sh
-   sops encrypt --input-type dotenv --output-type dotenv .env > secrets.enc.env
-   ```
-
-   Edit them later with `sops secrets.enc.env`.
-
-   | Secret | |
-   |---|---|
-   | `DB_PASSWORD` | `Db.Password` |
-   | `API_KEY` | `Api.Key`, the Mistral API key |
-   | `EMBEDDING_KEY` | `Embedding.Key`; optional, leave out for a server that needs none |
-   | `AUTHORIZED_KEYS` | OpenSSH public keys separated by `\n`, rewritten into the volume on every start: change it and redeploy to add or remove a key |
-
-   The workflow decrypts them with the age private key, stored as the Gitea
-   repository secret `SOPS_AGE_KEY` (the `AGE-SECRET-KEY-...` line of
-   `~/.config/sops/age/keys.txt`), and hands them to `docker compose` as
-   environment variables without writing them to disk. Everything else is set
-   in `docker-compose.yml`, which only lists what differs from the defaults.
-
-   The calendars are mounted from the `calendar` service's data directory. The
-   container runs as uid 1000, the owner of the synced files, so it can write
-   the `Write` calendars.
-
-3. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
-   `ssh-souvenir.macocian.com` to `ssh://localhost:2223`, and on the client:
-
-   ```
-   Host ssh-souvenir.macocian.com
-       ProxyCommand /usr/bin/cloudflared access ssh --hostname %h
-   ```
-
-The embedding server is a llama.cpp server (started with `--embeddings
---pooling last` for Qwen3-Embedding) reached over the external `llm-network`.
-Embeddings also need pgvector in the database: until the Postgres image has it
-and `CREATE EXTENSION vector` has been run in the database as the superuser,
-the app logs "Embedding disabled", message search uses keywords only and memory
-search is unavailable.
+The release needs the repository secrets `REGISTRY` (the Gitea host),
+`REGISTRY_USER`, `REGISTRY_TOKEN` and `DEPLOY_REPO_TOKEN` (write access to
+souvenir-deploy).
 
 ## License
 

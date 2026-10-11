@@ -1,7 +1,9 @@
 name: Release
 
-# A release is a version tag: `git tag v0.1.0 && git push --tags`. The image is
-# built on the server's Docker and the container replaced in place.
+# A release is a version tag: `git tag v0.1.0 && git push --tags`. This only
+# builds and publishes the image. What runs, and with which configuration and
+# secrets, is the souvenir-deploy repo's job; this workflow moves it onto the
+# new version.
 on:
   push:
     tags: ['v*']
@@ -28,34 +30,46 @@ jobs:
           esac
           echo "VERSION=$version" >> "$GITEA_ENV"
 
-      - name: Install sops
+      # Secrets are read by the step that uses them: the runner leaves them empty,
+      # without failing, when they are referenced from a job-level env.
+      - name: Work out the image name
         env:
-          SOPS_VERSION: v3.13.3
+          REGISTRY: ${{ secrets.REGISTRY }}
         run: |
-          base="https://github.com/getsops/sops/releases/download/$SOPS_VERSION"
-          curl -fsSLo sops "$base/sops-$SOPS_VERSION.linux.amd64"
-          curl -fsSLo sops.checksums.txt "$base/sops-$SOPS_VERSION.checksums.txt"
-          echo "$(grep " sops-$SOPS_VERSION.linux.amd64\$" sops.checksums.txt | cut -d' ' -f1)  sops" | sha256sum -c
-          install -m 755 sops /usr/local/bin/sops
-          rm sops sops.checksums.txt
+          [ -n "$REGISTRY" ] || { echo "secrets.REGISTRY is empty. It holds the Gitea host (e.g. git.example.org)."; exit 1; }
+          registry="${REGISTRY#http://}"
+          registry="${registry#https://}"
+          registry="${registry%/}"
+          echo "REGISTRY=$registry" >> "$GITEA_ENV"
+          echo "IMAGE=$registry/radumaco/souvenir" >> "$GITEA_ENV"
 
       - name: Build image
-        run: docker build -t "souvenir:$VERSION" .
+        run: docker build -t "$IMAGE:$VERSION" .
 
-      - name: Set image tag in docker-compose.yml
-        run: sed -i "s/#{image_tag}#/$VERSION/g" ./docker-compose.yml
-
-      # exec-env hands the decrypted values to compose as environment variables,
-      # so no plaintext .env is written to the runner's disk.
-      - name: Deploy
+      - name: Push image
         env:
-          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
-          [ -n "$SOPS_AGE_KEY" ] || { echo "Missing secret: SOPS_AGE_KEY"; exit 1; }
-          sops exec-env secrets.enc.env 'docker compose -p souvenir -f ./docker-compose.yml up -d'
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          docker push "$IMAGE:$VERSION"
 
-      - name: Prune old images
+      # The deploy repo redeploys off this commit.
+      - name: Move the deployment onto this version
+        env:
+          DEPLOY_REPO_TOKEN: ${{ secrets.DEPLOY_REPO_TOKEN }}
         run: |
-          docker image ls souvenir --format '{{.Repository}}:{{.Tag}}' \
-            | grep -v "^souvenir:$VERSION$" \
-            | xargs -r docker rmi -f || true
+          # Outside the checkout, whose own deploy/ holds the image's config.
+          repo=$(mktemp -d)
+          git clone --depth 1 "http://radumaco:$DEPLOY_REPO_TOKEN@gitea:3030/radumaco/souvenir-deploy.git" "$repo"
+          cd "$repo"
+          git config user.name "souvenir release"
+          git config user.email "noreply@macocian.com"
+          sed -i "s|^SOUVENIR_TAG=.*|SOUVENIR_TAG=$VERSION|" versions.env
+          git diff --quiet && { echo "already on $VERSION"; exit 0; }
+          git commit -am "souvenir $VERSION"
+          git push
+
+      - name: Remove local image
+        if: always()
+        run: docker rmi -f "$IMAGE:$VERSION" || true
