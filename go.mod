@@ -8,12 +8,15 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	charm.land/ssh v0.4.3
 	charm.land/wish/v2 v2.0.5
+	codeberg.org/readeck/go-readability/v2 v2.1.3
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
 	github.com/jackc/pgx/v5 v5.4.3
 	github.com/pgvector/pgvector-go v0.4.0
 	github.com/sahilm/fuzzy v0.1.1
 	github.com/teambition/rrule-go v1.8.2
+	golang.org/x/net v0.59.0
 )
 
 require (
@@ -26,6 +29,8 @@ require (
 
 require (
 	charm.land/log/v2 v2.0.1 // indirect
+	github.com/JohannesKaufmann/dom v0.3.1 // indirect
+	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
@@ -40,6 +45,9 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
+	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
+	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
+	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect

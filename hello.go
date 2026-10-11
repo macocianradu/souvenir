@@ -83,6 +83,9 @@ func main() {
 		}
 		toolset = append(toolset, tools.WebSearch(searcher))
 	}
+	if config.Fetch.Enabled {
+		toolset = append(toolset, tools.WebFetch(web.NewFetcher(config.Fetch), config.Fetch.MaxChars))
+	}
 	a := app{
 		cfg:      config,
 		history:  history.New(pool, config.Db),

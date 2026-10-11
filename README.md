@@ -39,7 +39,12 @@ Esc cancels a running tool.
 
 `web_search` queries the configured search backend (SearXNG for now) and returns the top results' titles,
 links and snippets, optionally limited to the last day, week, month or year. It
-is offered only when `WebSearch.Url` is set.
+is offered only when `WebSearch.Url` is set. `web_fetch` reads a page: the main
+content is extracted with readability and converted to markdown, and long pages
+come in `Fetch.MaxChars` parts the model asks for in turn. Only http and https
+are fetched, and every connection, redirects included, is checked on the
+address actually dialled, so private, loopback, link-local and other non-public
+ranges are refused even behind a public name.
 
 `search_history` runs the same hybrid search as the `/history` search over every
 other conversation and returns the matching messages with their conversation
@@ -143,21 +148,10 @@ most relevant chunks pulled from earlier in the same conversation.
 
 ### Tools
 
-A fetch tool is next. Tools are exposed through the API's native tool calling.
+Tools are exposed through the API's native tool calling.
 MCP would only be worth the transport layer if these tools needed to be
 reachable from other clients, and they do not, since they live in the same
 binary.
-
-### Web access
-
-Search is in place (see Chat above). Still to come: a fetch tool, because
-search snippets are too thin to answer from. Fetched pages go through readability
-extraction and markdown conversion and get truncated to a budget before they
-reach the model.
-
-Fetch needs an SSRF guard: http and https only, private, loopback and
-link-local ranges rejected, and the resolved address rechecked on every redirect
-hop, since redirecting into the internal network is the obvious bypass.
 
 ### Calendar
 
@@ -232,6 +226,16 @@ the only one so far, and an unknown one stops startup. A new backend implements
 instance with the `json` format enabled under `search.formats` in its
 `settings.yml` (otherwise it answers 403), and its limiter off or this client
 allowed. Left out, `web_search` is not offered. `Timeout` is in milliseconds.
+
+### Fetch
+
+```json
+"Fetch": { "Enabled": true, "Timeout": 20000, "MaxBytes": 5242880, "MaxChars": 20000 }
+```
+
+On by default. `Timeout` is in milliseconds, `MaxBytes` caps what is downloaded
+and `MaxChars` how much of a page the model gets per call. HTML, text, JSON and
+XML are read; anything else is refused.
 
 ### Calendars
 

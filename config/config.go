@@ -28,6 +28,14 @@ type Config struct {
 	Ssh       SshConfig
 	Calendars CalendarsConfig
 	WebSearch WebSearchConfig
+	Fetch     FetchConfig
+}
+
+type FetchConfig struct {
+	Enabled  bool
+	Timeout  int
+	MaxBytes int
+	MaxChars int
 }
 
 type WebSearchConfig struct {
@@ -208,6 +216,7 @@ func defaultConfig() *Config {
 		},
 		CalendarsConfig{},
 		WebSearchConfig{Provider: "searxng", Timeout: 10000},
+		FetchConfig{Enabled: true, Timeout: 20000, MaxBytes: 5 << 20, MaxChars: 20000},
 	}
 }
 
@@ -331,6 +340,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Db.ChunkOverlap < 0 || cfg.Db.ChunkSize <= cfg.Db.ChunkOverlap {
 		return errors.New("Db.ChunkSize must be larger than Db.ChunkOverlap, and the overlap must not be negative")
+	}
+	if cfg.Fetch.Timeout <= 0 || cfg.Fetch.MaxBytes <= 0 || cfg.Fetch.MaxChars <= 0 {
+		return errors.New("Fetch.Timeout, Fetch.MaxBytes and Fetch.MaxChars must be positive")
 	}
 	if cfg.WebSearch.Timeout <= 0 {
 		return errors.New("WebSearch.Timeout must be positive")

@@ -75,3 +75,64 @@ func formatResults(found web.Results, limit int) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+func WebFetch(fetcher *web.Fetcher, maxChars int) Tool {
+	return Tool{
+		Name: "web_fetch",
+		Description: "Read a web page or text file by its URL, as markdown with the page's clutter removed. " +
+			"Use it on links from web_search when the snippet is not enough, or on a link the user gives. " +
+			"Long pages come in parts: the end of each part says which start to ask for next.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"url": {"type": "string", "description": "The http or https URL to read"},
+				"start": {"type": "integer", "description": "Character to start from, to read further into a long page. Default 0"}
+			},
+			"required": ["url"]
+		}`),
+		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var args struct {
+				Url   string `json:"url"`
+				Start int    `json:"start"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(args.Url) == "" {
+				return "", errors.New("url is required")
+			}
+			page, err := fetcher.Fetch(ctx, args.Url)
+			if err != nil {
+				return "", err
+			}
+			return formatPage(page, max(args.Start, 0), maxChars), nil
+		},
+	}
+}
+
+func formatPage(page web.Page, start, maxChars int) string {
+	content := []rune(page.Content)
+	var b strings.Builder
+	if page.Title != "" {
+		fmt.Fprintf(&b, "Title: %s\n", page.Title)
+	}
+	fmt.Fprintf(&b, "URL: %s\n\n", page.Url)
+	if len(content) == 0 {
+		b.WriteString("The page has no readable text.")
+		return b.String()
+	}
+	if start >= len(content) {
+		fmt.Fprintf(&b, "The page is only %d characters long.", len(content))
+		return b.String()
+	}
+	end := min(start+maxChars, len(content))
+	b.WriteString(string(content[start:end]))
+	if start > 0 || end < len(content) {
+		fmt.Fprintf(&b, "\n\n[Characters %d to %d of %d.", start, end, len(content))
+		if end < len(content) {
+			fmt.Fprintf(&b, " Call web_fetch with start=%d for more.", end)
+		}
+		b.WriteString("]")
+	}
+	return b.String()
+}
