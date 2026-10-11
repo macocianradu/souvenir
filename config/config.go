@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const ENV_PREFIX = "SOUV__"
@@ -24,6 +26,18 @@ type Config struct {
 	Db        DbConfig
 	Embedding EmbeddingConfig
 	Ssh       SshConfig
+	Calendars CalendarsConfig
+}
+
+type CalendarsConfig struct {
+	Path     string
+	Read     []string
+	Write    []string
+	Timezone string
+}
+
+func (c CalendarsConfig) Enabled() bool {
+	return c.Path != "" && len(c.Read)+len(c.Write) > 0
 }
 
 type SshConfig struct {
@@ -38,8 +52,6 @@ type DbConfig struct {
 	DbName       string
 	User         string
 	Password     string
-	History      HistoryConfig
-	Memory       MemoryConfig
 	ChunkSize    int
 	ChunkOverlap int
 }
@@ -67,14 +79,6 @@ type EmbeddingConfig struct {
 	DocPrefix      string
 	MaxDistance    float64
 	DistanceMargin float64
-}
-
-type MemoryConfig struct {
-	Enabled bool
-}
-
-type HistoryConfig struct {
-	Enabled bool
 }
 
 type ApiConfig struct {
@@ -176,7 +180,6 @@ func defaultConfig() *Config {
 			Port:         "54321",
 			Password:     "",
 			DbName:       "souvenir",
-			History:      HistoryConfig{Enabled: true},
 			ChunkSize:    400,
 			ChunkOverlap: 40,
 		},
@@ -196,6 +199,7 @@ func defaultConfig() *Config {
 			HostKeyPath:    ".ssh/souvenir_ed25519",
 			AuthorizedKeys: "authorized_keys",
 		},
+		CalendarsConfig{},
 	}
 }
 
@@ -260,6 +264,17 @@ func setField(f reflect.Value, val string) error {
 			return err
 		}
 		f.SetBool(b)
+	case reflect.Slice:
+		if f.Type().Elem().Kind() != reflect.String {
+			return fmt.Errorf("%s cannot be set from the environment", f.Type())
+		}
+		var items []string
+		for item := range strings.SplitSeq(val, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				items = append(items, item)
+			}
+		}
+		f.Set(reflect.ValueOf(items).Convert(f.Type()))
 	default:
 		return fmt.Errorf("%s cannot be set from the environment", f.Type())
 	}
@@ -308,6 +323,23 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Db.ChunkOverlap < 0 || cfg.Db.ChunkSize <= cfg.Db.ChunkOverlap {
 		return errors.New("Db.ChunkSize must be larger than Db.ChunkOverlap, and the overlap must not be negative")
+	}
+	return cfg.Calendars.validate()
+}
+
+func (c CalendarsConfig) validate() error {
+	if c.Path == "" && len(c.Read)+len(c.Write) > 0 {
+		return errors.New("Calendars.Read and Calendars.Write need Calendars.Path")
+	}
+	for _, name := range append(append([]string{}, c.Read...), c.Write...) {
+		if !filepath.IsLocal(name) {
+			return fmt.Errorf("Calendars: %q is not a calendar directory inside Calendars.Path", name)
+		}
+	}
+	if c.Timezone != "" {
+		if _, err := time.LoadLocation(c.Timezone); err != nil {
+			return fmt.Errorf("Calendars.Timezone: %w", err)
+		}
 	}
 	return nil
 }

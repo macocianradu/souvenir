@@ -82,6 +82,9 @@ var migrations = []string{
 	);
 	CREATE INDEX memories_tsv_idx ON memories USING gin (tsv);
 	`,
+	`
+	ALTER TABLE conversations DROP COLUMN summary_through_seq;
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

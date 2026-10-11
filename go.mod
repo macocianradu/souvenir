@@ -9,9 +9,11 @@ require (
 	charm.land/ssh v0.4.3
 	charm.land/wish/v2 v2.0.5
 	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
 	github.com/jackc/pgx/v5 v5.4.3
 	github.com/pgvector/pgvector-go v0.4.0
 	github.com/sahilm/fuzzy v0.1.1
+	github.com/teambition/rrule-go v1.8.2
 )
 
 require (

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db"
 	"git.estatecloud.org/radumaco/souvenir/db/embed"
@@ -65,11 +66,20 @@ func main() {
 		go runEmbedding(ctx, config, store, memories, logger)
 	}
 	searcher := search.New(pool, store)
+	toolset := append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)
+	if config.Calendars.Enabled() {
+		calendars, err := calendar.New(config.Calendars)
+		if err != nil {
+			logger.Error("Calendars disabled", "error", err)
+		} else {
+			toolset = append(toolset, tools.CalendarTools(calendars)...)
+		}
+	}
 	a := app{
 		cfg:      config,
 		history:  history.New(pool, config.Db),
 		searcher: searcher,
-		registry: tools.NewRegistry(append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)...),
+		registry: tools.NewRegistry(toolset...),
 		memories: memories,
 	}
 

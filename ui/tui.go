@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -66,6 +67,7 @@ type uiModel struct {
 	memories       *memory.Store
 	turn           int
 	turnMemories   []memory.Memory
+	location       *time.Location
 }
 
 type streamEventMessage struct {
@@ -141,6 +143,11 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	location := time.Local
+	if tz := config.Calendars.Timezone; tz != "" {
+		location, _ = time.LoadLocation(tz)
+	}
+
 	ui := uiModel{
 		textarea:       ta,
 		conversation:   model.Conversation{},
@@ -158,6 +165,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		tools:          registry,
 		memories:       memories,
 		ctx:            ctx,
+		location:       location,
 		logger:         *slog.Default().With("Component", "TUI"),
 	}
 	ui.picker = newPicker()

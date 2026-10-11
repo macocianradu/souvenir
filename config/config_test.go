@@ -28,19 +28,31 @@ func TestEnv_OverridesAnyScalarKeyCaseInsensitively(t *testing.T) {
 	t.Setenv("SOUV__db__dbName", "legacy")
 	t.Setenv("SOUV__LLM__TITLEMODEL", "cheap")
 	t.Setenv("SOUV__llm__thinking", "true")
-	t.Setenv("SOUV__db__history__enabled", "false")
 	t.Setenv("SOUV__embedding__maxDistance", "0.5")
 
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Db.DbName != "legacy" || cfg.Llm.TitleModel != "cheap" || cfg.Db.History.Enabled ||
+	if cfg.Db.DbName != "legacy" || cfg.Llm.TitleModel != "cheap" ||
 		cfg.Embedding.Dim != 1024 || cfg.Embedding.MaxDistance != 0.5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.Llm.Thinking == nil || !*cfg.Llm.Thinking {
 		t.Fatal("pointer field not set")
+	}
+}
+
+func TestEnv_StringListsAreCommaSeparated(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SOUV__calendars__path", "/cals")
+	t.Setenv("SOUV__calendars__read", "work, home,")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.Calendars.Read, "|") != "work|home" || !cfg.Calendars.Enabled() {
+		t.Fatalf("%+v", cfg.Calendars)
 	}
 }
 
@@ -118,16 +130,18 @@ func TestLogging_EmptyListDisablesLogging(t *testing.T) {
 
 func TestValidate_RejectsUnusableSettings(t *testing.T) {
 	for name, env := range map[string][2]string{
-		"no dimension":          {"SOUV__embedding__dim", "0"},
-		"no batch size":         {"SOUV__embedding__batchSize", "0"},
-		"no interval":           {"SOUV__embedding__interval", "0"},
-		"negative quiet":        {"SOUV__embedding__quiet", "-1"},
-		"distance out of range": {"SOUV__embedding__maxDistance", "3"},
-		"negative margin":       {"SOUV__embedding__distanceMargin", "-0.1"},
-		"overlap too large":     {"SOUV__db__chunkOverlap", "400"},
-		"no tool rounds":        {"SOUV__llm__maxToolRounds", "0"},
-		"negative budget":       {"SOUV__llm__contextBudget", "-1"},
-		"nothing kept recent":   {"SOUV__llm__keepRecent", "0"},
+		"no dimension":           {"SOUV__embedding__dim", "0"},
+		"no batch size":          {"SOUV__embedding__batchSize", "0"},
+		"no interval":            {"SOUV__embedding__interval", "0"},
+		"negative quiet":         {"SOUV__embedding__quiet", "-1"},
+		"distance out of range":  {"SOUV__embedding__maxDistance", "3"},
+		"negative margin":        {"SOUV__embedding__distanceMargin", "-0.1"},
+		"overlap too large":      {"SOUV__db__chunkOverlap", "400"},
+		"no tool rounds":         {"SOUV__llm__maxToolRounds", "0"},
+		"negative budget":        {"SOUV__llm__contextBudget", "-1"},
+		"nothing kept recent":    {"SOUV__llm__keepRecent", "0"},
+		"calendars without path": {"SOUV__calendars__read", "work"},
+		"unknown timezone":       {"SOUV__calendars__timezone", "Mars/Olympus"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			setRequired(t)
@@ -136,6 +150,15 @@ func TestValidate_RejectsUnusableSettings(t *testing.T) {
 				t.Fatal("expected a validation error")
 			}
 		})
+	}
+}
+
+func TestValidate_CalendarNamesStayInsidePath(t *testing.T) {
+	for _, name := range []string{"../etc", "/abs", ""} {
+		setRequired(t)
+		if _, err := Load(writeConfig(t, `{"Calendars":{"Path":"/cals","Write":["`+name+`"]}}`)); err == nil {
+			t.Fatalf("%q accepted", name)
+		}
 	}
 }
 

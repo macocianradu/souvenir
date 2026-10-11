@@ -35,12 +35,14 @@ jobs:
           SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
           SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
           SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
+          SOUVENIR_CALENDARS_DIR: ${{ vars.SOUVENIR_CALENDARS_DIR }}
         run: |
           missing=""
           [ -n "$SOUVENIR_DB_PASSWORD" ] || missing="$missing SOUVENIR_DB_PASSWORD"
           [ -n "$SOUVENIR_API_KEY" ] || missing="$missing SOUVENIR_API_KEY"
           [ -n "$SOUVENIR_AUTHORIZED_KEYS" ] || missing="$missing SOUVENIR_AUTHORIZED_KEYS"
-          [ -z "$missing" ] || { echo "Missing secrets:$missing"; exit 1; }
+          [ -n "$SOUVENIR_CALENDARS_DIR" ] || missing="$missing SOUVENIR_CALENDARS_DIR"
+          [ -z "$missing" ] || { echo "Missing secrets or variables:$missing"; exit 1; }
 
       - name: Build image
         run: docker build -t "souvenir:$VERSION" .
@@ -53,6 +55,10 @@ jobs:
           SOUVENIR_DB_PASSWORD: ${{ secrets.SOUVENIR_DB_PASSWORD }}
           SOUVENIR_API_KEY: ${{ secrets.SOUVENIR_API_KEY }}
           SOUVENIR_AUTHORIZED_KEYS: ${{ secrets.SOUVENIR_AUTHORIZED_KEYS }}
+          SOUVENIR_CALENDARS_DIR: ${{ vars.SOUVENIR_CALENDARS_DIR }}
+          SOUVENIR_CALENDARS_READ: ${{ vars.SOUVENIR_CALENDARS_READ }}
+          SOUVENIR_CALENDARS_WRITE: ${{ vars.SOUVENIR_CALENDARS_WRITE }}
+          SOUVENIR_CALENDARS_TIMEZONE: ${{ vars.SOUVENIR_CALENDARS_TIMEZONE }}
         run: docker compose -p souvenir -f ./docker-compose.yml up -d
 
       - name: Prune old images

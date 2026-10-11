@@ -9,8 +9,8 @@ Written in Go to keep the footprint small: one static binary, with Postgres and
 
 ## Status
 
-Pre-1.0 and under active development. The chat loop is usable day to day. The
-retrieval side, which is the whole point of the name, is still being built.
+Pre-1.0 and under active development. The chat loop is usable day to day, and
+hybrid search over past conversations and memories is in place.
 
 ## What it does
 
@@ -48,7 +48,13 @@ the user refines ("since September 2025") is rewritten in place rather than
 saved again, and saving the same text twice returns the existing memory.
 Memories get the same per-model vector tables and hybrid search as messages,
 are embedded as soon as they are saved, and are backfilled by the background
-pass if that failed.
+pass if that failed. Unlike message search, memory search needs embeddings: it
+returns an error rather than falling back to keywords.
+
+On every message the top `Llm.MemoryRecall` memories (default 5, 0 turns it
+off) are found with that search and given to the model ahead of the
+conversation. Like tool rounds they are working state for the turn: shown faded
+above the answer, never saved into the history.
 
 Conversations get a title and a summary from a single cheap-model call, using a
 separate model if you configure one. It runs in the background after the first
@@ -81,8 +87,8 @@ Postgres, via `pgx`. The app creates its own database and schema on first run.
 Conversations and messages are stored with an ordering sequence per
 conversation, and saves are incremental: only messages past the stored maximum
 sequence get written. Every message carries a generated `tsvector` column with a
-GIN index, which gives keyword search for free and is half of the eventual
-hybrid retrieval.
+GIN index, which gives keyword search for free and is half of the hybrid
+search.
 
 Messages are split into overlapping word chunks and stored with a hash of their
 content, which is what makes re-embedding idempotent.
@@ -93,9 +99,9 @@ An OpenAI-compatible `/v1/embeddings` client with batching. Vectors go into a
 table named after the embedding model and its dimension, created on demand.
 
 Finding work to do is a single query: left join the chunks against the vector
-table on `content_hash` and take the rows that miss. New messages, edited
-messages and a switch to a different embedding model all fall out of that one
-query, and re-running it only does what is left, so it is safe to interrupt.
+table on `content_hash` and take the rows that miss. New messages and a switch
+to a different embedding model both fall out of that one query, and re-running
+it only does what is left, so it is safe to interrupt.
 
 Embedding runs on a timer in the background rather than during a turn. It picks
 up conversations that have gone quiet and have chunks without vectors, so the
@@ -108,17 +114,18 @@ key. It covers the API endpoint, the chat and title models, the database
 connection, the embedding backend and chunking, and logging, which supports
 several handlers at once with their own level, format and target.
 
-## Where it stops
+### Search
 
 `db/search` runs hybrid search: cosine distance over the vector table and
 `websearch_to_tsquery` over the text index, merged with reciprocal rank fusion,
-falling back to keywords alone when embeddings are unavailable. It backs
-the `/history` search and the `search_history` tool, but nothing feeds retrieved context
-into a prompt automatically yet.
-On every message the top `Llm.MemoryRecall` memories (default 5, 0 turns it
-off) are found with the same search and given to the model ahead of the
-conversation. Like tool rounds they are working state for the turn: shown faded
-above the answer, never saved into the history.
+falling back to keywords alone when embeddings are unavailable. Keyword search
+catches exact names that embeddings paraphrase away, vectors catch restatements
+that share no words. Search ranks messages rather than titles, since titles are
+generated, and backs both the `/history` search and the `search_history` tool.
+Only user and assistant messages are indexed; tool rounds are never saved, so a
+fetched page cannot turn up in every later search. Exact search is fine at this
+scale; an ANN index only starts earning its keep somewhere north of 100k
+chunks.
 
 ## Planned
 
@@ -126,37 +133,16 @@ Roughly the order things are expected to land in.
 
 ### Retrieval
 
-This is the hard part and the centerpiece, so it gets the most time.
-
-Search combines both signals: cosine distance over the vector table merged and
-reranked with `to_tsquery` over the text index. Keyword search catches exact
-names that embeddings paraphrase away, vectors catch restatements that share no
-words. Exact search is fine at this scale; an ANN index only starts earning its
-keep somewhere north of 100k chunks.
-
-Cross-conversation search ranks on message content rather than titles, since
-titles are generated and unreliable, and returns the matching conversation with
-a snippet. It shows up both as a search box in the UI and as a tool the model
-can call when it decides an old conversation is relevant.
-
-Context assembly already keeps the last few turns verbatim and a rolling summary
-of everything older (see Chat above). Still to come: the most relevant chunks
-pulled from earlier in the same conversation, and relevant memories.
-Tool output is skipped or marked when indexing, because a fetched web page will
-otherwise turn up in recall for every term it happens to mention. Queries and
-documents get different prefixes where the model expects them, which is easy to
-miss and quietly costs recall.
-
-### Memory
-
-Memory is in place (see Chat above).
+Context assembly keeps the last few turns verbatim, a rolling summary of
+everything older and the recalled memories (see Chat above). Still to come: the
+most relevant chunks pulled from earlier in the same conversation.
 
 ### Tools
 
-The loop and `search_history` are in place (see Chat above); memory, web and
-calendar tools follow. Tools are exposed through the API's native tool calling. MCP would only be worth
-the transport layer if these tools needed to be reachable from other clients,
-and they do not, since they live in the same binary.
+Web tools are next. Tools are exposed through the API's native tool calling.
+MCP would only be worth the transport layer if these tools needed to be
+reachable from other clients, and they do not, since they live in the same
+binary.
 
 ### Web access
 
@@ -171,9 +157,9 @@ hop, since redirecting into the internal network is the obvious bypass.
 
 ### Calendar
 
-Reading and writing iCalendar files in a directory that `vdirsyncer` keeps in
-sync. The app never speaks CalDAV itself, which keeps calendar support down to
-parsing and writing files.
+Not yet covered by the calendar tools: to-dos
+(`VTODO`), editing or deleting a single occurrence of a recurring event, and
+moving an event between calendars.
 
 ### Other frontends
 
@@ -204,10 +190,10 @@ Organizations and teams are deliberately left for later.
 ## Configuration
 
 `.config.json` is read from the working directory. Any string, number or
-boolean key can be overridden with a `SOUV__section__key` environment variable,
-nested sections included (`SOUV__db__history__enabled`); names are matched
-case-insensitively, and an unknown key is a startup error rather than silently
-ignored. `Logging` is a list and can only be set in the file.
+boolean key, or list of strings (comma separated), can be overridden with a
+`SOUV__section__key` environment variable (`SOUV__llm__model`); names are
+matched case-insensitively, and an unknown key is a startup error rather than
+silently ignored. `Logging` is a list and can only be set in the file.
 
 Each `Logging` entry is a handler with its own level, format (`text` or `json`)
 and target: a file path, `stdout`, `stderr` or `discard`. The TUI owns the
@@ -229,6 +215,30 @@ terminal, so an entry without a target writes to `souvenir.log`.
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
 ```
+
+### Calendars
+
+```json
+"Calendars": { "Path": "$HOME/.calendars/icloud", "Read": ["home", "work"],
+               "Write": ["assistant"], "Timezone": "Europe/Brussels" }
+```
+
+`Path` is a `vdirsyncer` filesystem storage: one subdirectory per calendar, one
+`.ics` file per event. Environment variables in it are expanded (`~` is not),
+and it must exist at startup or the calendar tools are disabled. The app never speaks CalDAV; it reads and writes those
+files and leaves syncing to `vdirsyncer`. Only calendars named in `Read` or
+`Write` are visible to the model, and every tool call is checked against them
+again: `Read` allows `calendar_list` (a day, Monday-to-Sunday week or month,
+recurring events expanded), `calendar_search` and `calendar_get`; `Write` also
+allows `calendar_create`, `calendar_update` and `calendar_delete`, and implies
+read access. With no `Read` or `Write` entries the tools are not offered.
+The lists can be set from the environment as comma separated values
+(`SOUV__calendars__read=home,work`).
+
+`Timezone` is the IANA zone the model's times are read and shown in, and the
+zone new events are written with (plus a matching `VTIMEZONE`). Left out, the
+process's local zone is used and new events are written in UTC. The same zone
+is used for the current date and time the model is given on every turn.
 
 `Llm.Thinking` sets llama.cpp's `enable_thinking` template argument. Leave it
 out for other servers: nothing server specific is sent unless it is set.
@@ -310,7 +320,15 @@ One-time setup:
    line; rewritten into the volume on every start, so change the secret and
    redeploy to add or remove a key).
 
-3. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
+3. Add the repository variables for the calendars: `SOUVENIR_CALENDARS_DIR`
+   (required), the host directory `vdirsyncer` syncs into, mounted at
+   `/calendars`; and `SOUVENIR_CALENDARS_READ`, `SOUVENIR_CALENDARS_WRITE`
+   (comma separated calendar names) and `SOUVENIR_CALENDARS_TIMEZONE`, which
+   map to the `Calendars` keys. With no names set, no calendar tools are
+   offered. The container runs as uid 10001, which needs write access to the
+   `Write` calendars.
+
+4. Add a public hostname to the Cloudflare tunnel, as for Gitea's SSH:
    `ssh-souvenir.macocian.com` to `ssh://localhost:2223`, and on the client:
 
    ```
@@ -323,7 +341,8 @@ Embeddings come from a llama.cpp server running Qwen3-Embedding-0.6B at
 reached over the external `llm-network`. They also need
 pgvector in the database: until the Postgres image has it and
 `CREATE EXTENSION vector` has been run in `souvenir` as the superuser, the app
-logs "Embedding disabled" and search uses keywords only.
+logs "Embedding disabled", message search uses keywords only and memory
+search is unavailable.
 
 ## License
 

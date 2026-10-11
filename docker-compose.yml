@@ -18,9 +18,14 @@ services:
       SOUV__embedding__batchSize: "8"
       SOUV__embedding__timeout: "120000"
       SOUV__embedding__queryPrefix: "Instruct: Given a search query, retrieve relevant passages\nQuery: "
+      SOUV__calendars__path: /calendars
+      SOUV__calendars__read: ${SOUVENIR_CALENDARS_READ:-}
+      SOUV__calendars__write: ${SOUVENIR_CALENDARS_WRITE:-}
+      SOUV__calendars__timezone: ${SOUVENIR_CALENDARS_TIMEZONE:-}
       AUTHORIZED_KEYS: ${SOUVENIR_AUTHORIZED_KEYS:?set the SOUVENIR_AUTHORIZED_KEYS secret}
     volumes:
       - souvenir_data:/data
+      - ${SOUVENIR_CALENDARS_DIR:?set the SOUVENIR_CALENDARS_DIR variable}:/calendars
     ports:
       - "2223:23234"
     networks:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/cursor"
 	tea "charm.land/bubbletea/v2"
@@ -250,7 +251,8 @@ func (m uiModel) handleMemoriesRecalled(msg memoriesRecalledMessage) (tea.Model,
 }
 
 func (m uiModel) turnContext() []model.Message {
-	var context []model.Message
+	now := time.Now().In(m.location)
+	context := []model.Message{{Role: "system", Content: "The current date and time is " + now.Format("Monday 2006-01-02 15:04 MST") + "."}}
 	if len(m.turnMemories) > 0 {
 		var b strings.Builder
 		b.WriteString("Facts saved about the user in earlier conversations, with their ids. Use them when " +
