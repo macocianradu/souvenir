@@ -27,6 +27,13 @@ type Config struct {
 	Embedding EmbeddingConfig
 	Ssh       SshConfig
 	Calendars CalendarsConfig
+	WebSearch WebSearchConfig
+}
+
+type WebSearchConfig struct {
+	Provider string
+	Url      string
+	Timeout  int
 }
 
 type CalendarsConfig struct {
@@ -200,6 +207,7 @@ func defaultConfig() *Config {
 			AuthorizedKeys: "authorized_keys",
 		},
 		CalendarsConfig{},
+		WebSearchConfig{Provider: "searxng", Timeout: 10000},
 	}
 }
 
@@ -323,6 +331,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Db.ChunkOverlap < 0 || cfg.Db.ChunkSize <= cfg.Db.ChunkOverlap {
 		return errors.New("Db.ChunkSize must be larger than Db.ChunkOverlap, and the overlap must not be negative")
+	}
+	if cfg.WebSearch.Timeout <= 0 {
+		return errors.New("WebSearch.Timeout must be positive")
 	}
 	return cfg.Calendars.validate()
 }

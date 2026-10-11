@@ -21,6 +21,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
+	"git.estatecloud.org/radumaco/souvenir/web"
 )
 
 type app struct {
@@ -74,6 +75,13 @@ func main() {
 		} else {
 			toolset = append(toolset, tools.CalendarTools(calendars)...)
 		}
+	}
+	if config.WebSearch.Url != "" {
+		searcher, err := web.New(config.WebSearch)
+		if err != nil {
+			fatal("Config error", err)
+		}
+		toolset = append(toolset, tools.WebSearch(searcher))
 	}
 	a := app{
 		cfg:      config,

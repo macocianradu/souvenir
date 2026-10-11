@@ -37,6 +37,10 @@ Tools live in a registry mapping a name to a Go function and a JSON schema, and
 return a plain string so the packages behind them never import the API types.
 Esc cancels a running tool.
 
+`web_search` queries the configured search backend (SearXNG for now) and returns the top results' titles,
+links and snippets, optionally limited to the last day, week, month or year. It
+is offered only when `WebSearch.Url` is set.
+
 `search_history` runs the same hybrid search as the `/history` search over every
 other conversation and returns the matching messages with their conversation
 and date, so the model can look up what was said before.
@@ -139,15 +143,15 @@ most relevant chunks pulled from earlier in the same conversation.
 
 ### Tools
 
-Web tools are next. Tools are exposed through the API's native tool calling.
+A fetch tool is next. Tools are exposed through the API's native tool calling.
 MCP would only be worth the transport layer if these tools needed to be
 reachable from other clients, and they do not, since they live in the same
 binary.
 
 ### Web access
 
-Search against a SearXNG instance, then a separate fetch tool, because search
-snippets are too thin to answer from. Fetched pages go through readability
+Search is in place (see Chat above). Still to come: a fetch tool, because
+search snippets are too thin to answer from. Fetched pages go through readability
 extraction and markdown conversion and get truncated to a budget before they
 reach the model.
 
@@ -215,6 +219,19 @@ terminal, so an entry without a target writes to `souvenir.log`.
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
 ```
+
+### Web search
+
+```json
+"WebSearch": { "Provider": "searxng", "Url": "http://searxng:8080", "Timeout": 10000 }
+```
+
+`Provider` picks the backend behind `web_search`; `searxng` (the default) is
+the only one so far, and an unknown one stops startup. A new backend implements
+`web.Searcher` and gets a case in `web.New`. For `searxng`, `Url` is an
+instance with the `json` format enabled under `search.formats` in its
+`settings.yml` (otherwise it answers 403), and its limiter off or this client
+allowed. Left out, `web_search` is not offered. `Timeout` is in milliseconds.
 
 ### Calendars
 
