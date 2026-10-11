@@ -80,7 +80,7 @@ func (m *uiModel) renderMessages() string {
 		case "user":
 			entry(lipgloss.PlaceHorizontal(width, lipgloss.Right, m.senderStyle.Render("You: ")+message.Content))
 		case "assistant":
-			entry(m.agentStyle.Render("Agent: ") + message.Content)
+			entry(m.agentStyle.Render("Agent: ") + formatMarkdown(message.Content))
 		}
 	}
 
@@ -88,7 +88,7 @@ func (m *uiModel) renderMessages() string {
 		activity()
 	}
 	if m.answerBuffer.Len() > 0 {
-		entry(m.agentStyle.Render("Agent: ") + m.answerBuffer.String())
+		entry(m.agentStyle.Render("Agent: ") + formatMarkdown(m.answerBuffer.String()))
 	}
 	return b.String()
 }
