@@ -168,3 +168,43 @@ func TestConnectionString_EscapesCredentials(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestValidate_WebNeedsABaseUrlAndOidc(t *testing.T) {
+	web := map[string]string{
+		"SOUV__web__listen":    ":8080",
+		"SOUV__web__baseUrl":   "https://llm.example.com",
+		"SOUV__oidc__issuer":   "https://auth.example.com/application/o/souvenir/",
+		"SOUV__oidc__clientId": "souvenir",
+	}
+	for name, change := range map[string][2]string{
+		"no base url":         {"SOUV__web__baseUrl", ""},
+		"base url with path":  {"SOUV__web__baseUrl", "https://example.com/souvenir"},
+		"base url not http":   {"SOUV__web__baseUrl", "ftp://example.com"},
+		"no issuer":           {"SOUV__oidc__issuer", ""},
+		"no client":           {"SOUV__oidc__clientId", ""},
+		"no session lifetime": {"SOUV__web__sessionDays", "0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setRequired(t)
+			for k, v := range web {
+				t.Setenv(k, v)
+			}
+			// An empty env value is ignored, so a removed setting is unset.
+			if change[1] == "" {
+				os.Unsetenv(change[0])
+			} else {
+				t.Setenv(change[0], change[1])
+			}
+			if _, err := Load(""); err == nil {
+				t.Fatal("expected a validation error")
+			}
+		})
+	}
+	setRequired(t)
+	for k, v := range web {
+		t.Setenv(k, v)
+	}
+	if _, err := Load(""); err != nil {
+		t.Fatal(err)
+	}
+}

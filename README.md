@@ -189,24 +189,17 @@ covered by exceptions), and moving an event between calendars.
 
 ### Other frontends
 
-The TUI is served over SSH (`souvenir serve`). Still to come: a small embedded
-web frontend sharing the same core (the `agent` package). Both reachable from outside the
+The TUI is served over SSH (`souvenir serve`), and the web sign-in exists (see
+Web sign-in below). Still to come: the chat itself on the web, sharing the same
+core (the `agent` package). Both reachable from outside the
 home network behind a reverse proxy, with the origin locked to the proxy and
 client addresses trusted from a header only when the request actually came
 through it.
 
 ### Logins
 
-Users and SSH keys exist (see Users above); web logins do not yet. One user
-identity with credentials attached to it. A local password, an OIDC
-login and an SSH key are all just credentials pointing at the same user, so
-linking two logins is linking two credentials rather than a special case.
-
-OIDC uses the authorization code flow with PKCE and full ID token validation.
-Accounts link on the issuer and subject pair, never on email, since email can be
-reassigned. Matching on a claim happens once when an unknown login first
-appears, with a uniqueness check so an ambiguous match cannot become an account
-takeover. Sessions live in Postgres so they can be revoked.
+SSH keys and OIDC sign-ins exist. Still to come: a local password, and signing
+out at the provider too (RP-initiated logout).
 
 Calendars are configured for one person, so they are offered only to the owner
 until each user can have their own. Organizations and teams are deliberately
@@ -318,6 +311,43 @@ migrate or destroy anything, it just starts filling a new table, because a
 another and back does not re-embed anything. While a new table is still filling,
 keyword search keeps working, so search gets worse rather than breaking.
 
+### Web sign-in
+
+Setting `Web.Listen` makes `souvenir serve` also serve HTTP, where people sign
+in with an OpenID Connect provider such as Authentik. For now the page only says
+who is signed in; the chat comes later.
+
+```json
+"Web":  { "Listen": ":8080", "BaseUrl": "https://llm.example.com", "SessionDays": 30 },
+"Oidc": { "Issuer": "https://auth.example.com/application/o/souvenir/",
+          "ClientId": "...", "ClientSecret": "...", "MatchClaim": "preferred_username" }
+```
+
+In Authentik, create an OAuth2/OpenID provider (confidential client) with the
+redirect URI `<BaseUrl>/auth/callback` and the `openid`, `profile` and `email`
+scopes, and an application for it. The issuer is the provider's "OpenID
+Configuration Issuer", trailing slash included; it must match exactly.
+
+Sign-in uses the authorization code flow with PKCE, a nonce, and a state that is
+also kept in a cookie, so a callback only completes in the browser that started
+it, and only once. The ID token's signature, issuer, audience and expiry are
+checked. The provider is first contacted on the first sign-in, so the server
+starts even while it is down.
+
+No user is ever created by signing in. The first time an unknown login appears,
+its `MatchClaim` claim is compared with the user names, and on a match the
+provider's issuer and subject are linked to that user. From then on only the
+subject counts, so renaming the account at the provider changes nothing. A user
+has at most one login per provider, so a second provider account claiming the
+same name is refused rather than taking the user over. Matching on `email` is
+allowed only when the provider says the address is verified.
+`souvenir users unlink NAME` forgets a user's links and ends their sessions.
+
+Sessions live in Postgres, and only a hash of each token is stored. The cookie
+is `HttpOnly` and `SameSite=Lax`; over https it is `Secure` with the `__Host-`
+prefix. Sign-out is a POST accepted only from `BaseUrl`'s own origin. Every page
+is sent with a strict Content-Security-Policy and `no-store`.
+
 ## Running
 
 Needs Go 1.26.8 or newer and a reachable Postgres with the `vector` extension
@@ -330,6 +360,7 @@ go run . serve    # the TUI over SSH
 go run . users                      # list users
 go run . users add NAME [admin]     # add a user
 go run . users remove NAME          # remove a user and everything they own
+go run . users unlink NAME          # forget their web sign-ins, end their sessions
 go run . keys                       # list registered SSH keys
 go run . keys add NAME < id.pub     # register a key (or pass it after NAME)
 go run . keys remove SHA256:...     # remove a key
@@ -352,6 +383,14 @@ ssh -p 23234 localhost
 ```json
 "Ssh": { "Listen": ":23234", "HostKeyPath": ".ssh/souvenir_ed25519",
          "AuthorizedKeys": "authorized_keys" }
+```
+
+The database tests run against a real Postgres when `SOUVENIR_TEST_DB` is set;
+they create and drop databases with that prefix, on the server named by the
+usual `PGHOST`, `PGPORT`, `PGUSER` and `PGPASSWORD`:
+
+```sh
+SOUVENIR_TEST_DB=souvenir_test PGUSER=me go test ./...
 ```
 
 ## Deploying

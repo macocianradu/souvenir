@@ -1,57 +1,22 @@
 package db_test
 
 import (
-	"cmp"
 	"context"
-	"fmt"
-	"os"
 	"strings"
 	"testing"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
-	"git.estatecloud.org/radumaco/souvenir/db"
+	"git.estatecloud.org/radumaco/souvenir/db/dbtest"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SOUVENIR_TEST_DB names a database that is dropped and recreated, on the
-// server given by PGHOST, PGPORT, PGUSER and PGPASSWORD.
 func testPool(t *testing.T) *pgxpool.Pool {
-	name := os.Getenv("SOUVENIR_TEST_DB")
-	if name == "" {
-		t.Skip("set SOUVENIR_TEST_DB to run against Postgres")
-	}
-	cfg := config.DbConfig{
-		Url:      cmp.Or(os.Getenv("PGHOST"), "localhost"),
-		Port:     cmp.Or(os.Getenv("PGPORT"), "5432"),
-		User:     os.Getenv("PGUSER"),
-		Password: os.Getenv("PGPASSWORD"),
-	}
-	ctx := context.Background()
-	maintenance := cfg
-	maintenance.DbName = "postgres"
-	conn, err := pgx.Connect(ctx, maintenance.ConnectionString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{"DROP DATABASE IF EXISTS %s", "CREATE DATABASE %s TEMPLATE template0"} {
-		if _, err := conn.Exec(ctx, fmt.Sprintf(stmt, pgx.Identifier{name}.Sanitize())); err != nil {
-			t.Fatal(err)
-		}
-	}
-	conn.Close(ctx)
-	cfg.DbName = name
-	pool, err := db.Open(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return dbtest.Pool(t, "scoping")
 }
 
 func TestScoping_UsersSeeOnlyTheirOwnRows(t *testing.T) {

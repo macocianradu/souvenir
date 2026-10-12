@@ -123,6 +123,31 @@ var migrations = []string{
 	ALTER TABLE memories DROP CONSTRAINT memories_content_hash_key;
 	ALTER TABLE memories ADD CONSTRAINT memories_user_id_content_hash_key UNIQUE (user_id, content_hash);
 	`,
+	`
+	CREATE TABLE oidc_identities (
+		issuer     TEXT NOT NULL,
+		subject    TEXT NOT NULL,
+		user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (issuer, subject),
+		UNIQUE (user_id, issuer)
+	);
+
+	CREATE TABLE oidc_logins (
+		state      TEXT PRIMARY KEY,
+		verifier   TEXT NOT NULL,
+		nonce      TEXT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
+
+	CREATE TABLE sessions (
+		token_hash TEXT PRIMARY KEY,
+		user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		expires_at TIMESTAMPTZ NOT NULL
+	);
+	CREATE INDEX sessions_user_id_idx ON sessions (user_id);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

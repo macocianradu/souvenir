@@ -200,3 +200,46 @@ func one(rows pgx.Rows, err error, what string) (User, error) {
 	}
 	return u, err
 }
+
+var ErrAlreadyLinked = errors.New("already linked to another login from this provider")
+
+func (s *Store) ByIdentity(ctx context.Context, issuer, subject string) (User, error) {
+	rows, err := s.pool.Query(ctx,
+		`
+		SELECT u.id, u.name, u.is_admin
+		  FROM oidc_identities i
+		  JOIN users u ON u.id = i.user_id
+		 WHERE i.issuer = $1 AND i.subject = $2
+		`, issuer, subject)
+	return one(rows, err, "login")
+}
+
+func (s *Store) LinkIdentity(ctx context.Context, userId, issuer, subject string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO oidc_identities (issuer, subject, user_id) VALUES ($1, $2, $3)`,
+		issuer, subject, userId)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return ErrAlreadyLinked
+	}
+	return err
+}
+
+func (s *Store) Unlink(ctx context.Context, name string) (int64, error) {
+	u, err := s.ByName(ctx, name)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `DELETE FROM oidc_identities WHERE user_id = $1`, u.Id)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, u.Id); err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), tx.Commit(ctx)
+}

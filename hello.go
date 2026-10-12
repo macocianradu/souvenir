@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,11 +21,13 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
+	"git.estatecloud.org/radumaco/souvenir/db/sessions"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
 	"git.estatecloud.org/radumaco/souvenir/web"
+	"git.estatecloud.org/radumaco/souvenir/webapp"
 )
 
 type app struct {
@@ -116,8 +120,24 @@ func main() {
 			fatal("Alas, there's been an error", err)
 		}
 	case "serve":
-		if err := serve(ctx, config.Ssh, accounts, func(ctx context.Context) tea.Model { return a.newModel(ctx, true) }); err != nil {
-			fatal("SSH server error", err)
+		ctx, stop := context.WithCancelCause(ctx)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			if err := serve(ctx, config.Ssh, accounts, func(ctx context.Context) tea.Model { return a.newModel(ctx, true) }); err != nil {
+				stop(fmt.Errorf("SSH server: %w", err))
+			}
+		})
+		if config.Web.Listen != "" {
+			site := webapp.New(config.Web, config.Oidc, accounts, sessions.NewStore(pool))
+			wg.Go(func() {
+				if err := site.ListenAndServe(ctx); err != nil {
+					stop(fmt.Errorf("web server: %w", err))
+				}
+			})
+		}
+		wg.Wait()
+		if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			fatal("Server error", err)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n%s", mode, usage)

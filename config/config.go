@@ -29,6 +29,21 @@ type Config struct {
 	Calendars CalendarsConfig
 	WebSearch WebSearchConfig
 	Fetch     FetchConfig
+	Web       WebConfig
+	Oidc      OidcConfig
+}
+
+type WebConfig struct {
+	Listen string
+	BaseUrl     string
+	SessionDays int
+}
+
+type OidcConfig struct {
+	Issuer       string
+	ClientId     string
+	ClientSecret string
+	MatchClaim string
 }
 
 type FetchConfig struct {
@@ -217,6 +232,8 @@ func defaultConfig() *Config {
 		CalendarsConfig{},
 		WebSearchConfig{Provider: "searxng", Timeout: 10000},
 		FetchConfig{Enabled: true, Timeout: 20000, MaxBytes: 5 << 20, MaxChars: 20000},
+		WebConfig{SessionDays: 30},
+		OidcConfig{MatchClaim: "preferred_username"},
 	}
 }
 
@@ -347,7 +364,29 @@ func (cfg Config) validate() error {
 	if cfg.WebSearch.Timeout <= 0 {
 		return errors.New("WebSearch.Timeout must be positive")
 	}
+	if err := cfg.Web.validate(cfg.Oidc); err != nil {
+		return err
+	}
 	return cfg.Calendars.validate()
+}
+
+func (w WebConfig) validate(o OidcConfig) error {
+	if w.Listen == "" {
+		return nil
+	}
+	if u, err := url.Parse(w.BaseUrl); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.TrimSuffix(u.Path, "/") != "" {
+		return errors.New("Web.BaseUrl must be the frontend's public address, like https://llm.example.com")
+	}
+	if w.SessionDays <= 0 {
+		return errors.New("Web.SessionDays must be positive")
+	}
+	if o.Issuer == "" || o.ClientId == "" {
+		return errors.New("the web frontend signs in with OIDC: set Oidc.Issuer and Oidc.ClientId")
+	}
+	if o.MatchClaim == "" {
+		return errors.New("Oidc.MatchClaim must name a claim, like preferred_username")
+	}
+	return nil
 }
 
 func (c CalendarsConfig) validate() error {
