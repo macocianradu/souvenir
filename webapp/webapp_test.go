@@ -196,21 +196,11 @@ func dana(sub string) map[string]any {
 	return map[string]any{"sub": sub, "preferred_username": "dana"}
 }
 
-func TestSignIn_OnlyExistingUsersLinkedOnceBySubject(t *testing.T) {
+func TestSignIn_CreatesNewUsersAndLinksOnceBySubject(t *testing.T) {
 	h := newHarness(t)
+	ctx := context.Background()
 
 	w := h.signIn(signIn{claims: dana("sub-1")})
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "no account for dana") {
-		t.Fatalf("%d %s", w.Code, w.Body)
-	}
-	if cookie(w, "souvenir-session") != nil {
-		t.Fatal("a session was given without an account")
-	}
-
-	if _, err := h.accounts.Add(context.Background(), "dana", false); err != nil {
-		t.Fatal(err)
-	}
-	w = h.signIn(signIn{claims: dana("sub-1")})
 	session := cookie(w, "souvenir-session")
 	if w.Code != http.StatusSeeOther || session == nil || !session.HttpOnly || session.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("%d %+v %s", w.Code, session, w.Body)
@@ -218,11 +208,17 @@ func TestSignIn_OnlyExistingUsersLinkedOnceBySubject(t *testing.T) {
 	if !strings.Contains(h.home(session), "Signed in as dana") {
 		t.Fatal("the session does not sign in")
 	}
+	if u, err := h.accounts.ByName(ctx, "dana"); err != nil || u.IsAdmin {
+		t.Fatalf("created %+v, %v", u, err)
+	}
 
-	// Once linked, the subject decides: a renamed account still signs in...
+	// Once linked, the subject decides: a renamed account is still dana...
 	w = h.signIn(signIn{claims: map[string]any{"sub": "sub-1", "preferred_username": "dana-renamed"}})
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("linked login refused: %d %s", w.Code, w.Body)
+	if w.Code != http.StatusSeeOther || !strings.Contains(h.home(cookie(w, "souvenir-session")), "Signed in as dana.") {
+		t.Fatalf("linked login: %d %s", w.Code, w.Body)
+	}
+	if _, err := h.accounts.ByName(ctx, "dana-renamed"); err == nil {
+		t.Fatal("a renamed provider account created a second user")
 	}
 	// ...and another provider account calling itself dana cannot take over.
 	w = h.signIn(signIn{claims: dana("sub-2")})
@@ -230,7 +226,7 @@ func TestSignIn_OnlyExistingUsersLinkedOnceBySubject(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 
-	if n, err := h.accounts.Unlink(context.Background(), "dana"); err != nil || n != 1 {
+	if n, err := h.accounts.Unlink(ctx, "dana"); err != nil || n != 1 {
 		t.Fatalf("unlinked %d: %v", n, err)
 	}
 	if strings.Contains(h.home(session), "Signed in") {
@@ -241,9 +237,27 @@ func TestSignIn_OnlyExistingUsersLinkedOnceBySubject(t *testing.T) {
 	}
 }
 
+func TestSignIn_LinksAnExistingUserOfThatName(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if err := h.accounts.Rename(ctx, "owner", "radu"); err != nil {
+		t.Fatal(err)
+	}
+	w := h.signIn(signIn{claims: map[string]any{"sub": "r", "preferred_username": "radu"}})
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	owner, _ := h.accounts.Owner(ctx)
+	if u, _ := h.server.sessions.User(ctx, cookie(w, "souvenir-session").Value); u.Id != owner.Id {
+		t.Fatalf("signed in as %+v, not the owner", u)
+	}
+	if all, _ := h.accounts.List(ctx); len(all) != 1 {
+		t.Fatalf("%d users", len(all))
+	}
+}
+
 func TestSignIn_RefusesForgedOrReplayedCallbacks(t *testing.T) {
 	h := newHarness(t)
-	h.accounts.Add(context.Background(), "dana", false)
 
 	if w := h.signIn(signIn{claims: dana("s"), loginCookie: sessions.Token()}); w.Code != http.StatusBadRequest {
 		t.Fatalf("a callback for another browser's sign-in: %d", w.Code)
@@ -278,7 +292,6 @@ func TestSignIn_RefusesForgedOrReplayedCallbacks(t *testing.T) {
 
 func TestLogout_NeedsTheSameOriginAndEndsTheSession(t *testing.T) {
 	h := newHarness(t)
-	h.accounts.Add(context.Background(), "dana", false)
 	session := cookie(h.signIn(signIn{claims: dana("s")}), "souvenir-session")
 
 	cross := httptest.NewRequest("POST", "/logout", nil)
@@ -304,7 +317,6 @@ func TestLogout_NeedsTheSameOriginAndEndsTheSession(t *testing.T) {
 
 func TestRequireUser_RunsAsTheSessionsUser(t *testing.T) {
 	h := newHarness(t)
-	h.accounts.Add(context.Background(), "dana", false)
 	session := cookie(h.signIn(signIn{claims: dana("s")}), "souvenir-session")
 	var seen string
 	protected := h.server.RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

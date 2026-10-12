@@ -334,14 +334,18 @@ it, and only once. The ID token's signature, issuer, audience and expiry are
 checked. The provider is first contacted on the first sign-in, so the server
 starts even while it is down.
 
-No user is ever created by signing in. The first time an unknown login appears,
-its `MatchClaim` claim is compared with the user names, and on a match the
-provider's issuer and subject are linked to that user. From then on only the
-subject counts, so renaming the account at the provider changes nothing. A user
-has at most one login per provider, so a second provider account claiming the
-same name is refused rather than taking the user over. Matching on `email` is
-allowed only when the provider says the address is verified.
-`souvenir users unlink NAME` forgets a user's links and ends their sessions.
+Who may sign in is decided in Authentik, by binding a group or policy to the
+application; souvenir has no sign-up of its own. The first time an unknown login
+appears, its `MatchClaim` claim is compared with the user names. A user of that
+name who has no login from this provider yet is linked to it; otherwise a new,
+non-admin user of that name is created and linked. From then on only the
+provider's issuer and subject count, so renaming the account at the provider
+changes nothing. A user has at most one login per provider, so a second provider
+account claiming a taken name is refused rather than taking the user over.
+Matching on `email` is allowed only when the provider says the address is
+verified. To sign in to the existing data, rename the owner to your provider
+user name first (`souvenir users rename owner NAME`). `souvenir users unlink
+NAME` forgets a user's links and ends their sessions.
 
 Sessions live in Postgres, and only a hash of each token is stored. The cookie
 is `HttpOnly` and `SameSite=Lax`; over https it is `Secure` with the `__Host-`
@@ -360,6 +364,7 @@ go run . serve    # the TUI over SSH
 go run . users                      # list users
 go run . users add NAME [admin]     # add a user
 go run . users remove NAME          # remove a user and everything they own
+go run . users rename NAME NEW      # rename a user
 go run . users unlink NAME          # forget their web sign-ins, end their sessions
 go run . keys                       # list registered SSH keys
 go run . keys add NAME < id.pub     # register a key (or pass it after NAME)

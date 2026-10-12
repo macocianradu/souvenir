@@ -50,7 +50,10 @@ func Id(ctx context.Context) (string, error) {
 	return u.Id, nil
 }
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound = errors.New("not found")
+	ErrExists   = errors.New("already exists")
+)
 
 type Store struct {
 	logger slog.Logger
@@ -89,9 +92,51 @@ func (s *Store) Add(ctx context.Context, name string, admin bool) (User, error) 
 	rows, err := s.pool.Query(ctx, `INSERT INTO users (name, is_admin) VALUES ($1, $2) RETURNING id, name, is_admin`, name, admin)
 	u, err := one(rows, err, "user")
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
-		return u, fmt.Errorf("user %q already exists", name)
+		return u, fmt.Errorf("user %q %w", name, ErrExists)
 	}
 	return u, err
+}
+
+// AddLinked creates a user for a provider's login and links the login to it
+// in one step, so a half-made user without its login is never left behind.
+func (s *Store) AddLinked(ctx context.Context, name, issuer, subject string) (User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `INSERT INTO users (name) VALUES ($1) RETURNING id, name, is_admin`, strings.TrimSpace(name))
+	u, err := one(rows, err, "user")
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return u, fmt.Errorf("user %q %w", name, ErrExists)
+	}
+	if err != nil {
+		return u, err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO oidc_identities (issuer, subject, user_id) VALUES ($1, $2, $3)`,
+		issuer, subject, u.Id); err != nil {
+		return u, err
+	}
+	return u, tx.Commit(ctx)
+}
+
+func (s *Store) Rename(ctx context.Context, name, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return errors.New("a user needs a name")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET name = $2 WHERE name = $1`, name, newName)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return fmt.Errorf("user %q %w", newName, ErrExists)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user %q: %w", name, ErrNotFound)
+	}
+	return nil
 }
 
 // Remove deletes a user with their conversations, memories and keys. The

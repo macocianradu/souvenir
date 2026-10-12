@@ -277,6 +277,12 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// resolve finds the user a provider login belongs to, creating one for a new
+// login. Who may sign in at all is decided at the provider. A login seen
+// before is known by its issuer and subject. An unknown one is matched once on
+// the configured claim: an existing user of that name who has no login from
+// this provider yet is linked to it, and otherwise a user of that name is
+// created.
 func (s *Server) resolve(ctx context.Context, issuer, subject string, claims map[string]any) (users.User, error) {
 	u, err := s.accounts.ByIdentity(ctx, issuer, subject)
 	if !errors.Is(err, users.ErrNotFound) {
@@ -291,21 +297,33 @@ func (s *Server) resolve(ctx context.Context, issuer, subject string, claims map
 	if claim == "email" && claims["email_verified"] != true {
 		return u, refusal("Your email address is not verified, so it cannot be matched to an account.")
 	}
-	u, err = s.accounts.ByName(ctx, value)
-	if errors.Is(err, users.ErrNotFound) {
-		return u, refusal(fmt.Sprintf("There is no account for %s. Ask the admin to create one with: souvenir users add %s", value, value))
-	}
-	if err != nil {
-		return u, err
-	}
-	if err := s.accounts.LinkIdentity(ctx, u.Id, issuer, subject); err != nil {
-		if errors.Is(err, users.ErrAlreadyLinked) {
-			return u, refusal(fmt.Sprintf("The account %s is already linked to a different sign-in.", value))
+	// Twice at most: a second sign-in of the same name may create the user
+	// between the lookup and the insert.
+	for range 2 {
+		u, err = s.accounts.ByName(ctx, value)
+		if errors.Is(err, users.ErrNotFound) {
+			u, err = s.accounts.AddLinked(ctx, value, issuer, subject)
+			if errors.Is(err, users.ErrExists) {
+				continue
+			}
+			if err == nil {
+				s.logger.Info("Created a user for a sign-in", "user", u.Name, "issuer", issuer, "subject", subject, "claim", claim)
+			}
+			return u, err
 		}
-		return u, err
+		if err != nil {
+			return u, err
+		}
+		if err := s.accounts.LinkIdentity(ctx, u.Id, issuer, subject); err != nil {
+			if errors.Is(err, users.ErrAlreadyLinked) {
+				return u, refusal(fmt.Sprintf("The account %s is already linked to a different sign-in.", value))
+			}
+			return u, err
+		}
+		s.logger.Info("Linked a sign-in to a user", "user", u.Name, "issuer", issuer, "subject", subject, "claim", claim)
+		return u, nil
 	}
-	s.logger.Info("Linked a sign-in to a user", "user", u.Name, "issuer", issuer, "subject", subject, "claim", claim)
-	return u, nil
+	return u, err
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

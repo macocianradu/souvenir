@@ -16,6 +16,7 @@ const usage = `usage:
   souvenir users                    list users
   souvenir users add NAME [admin]   add a user
   souvenir users remove NAME        remove a user and everything they own
+  souvenir users rename NAME NEW    rename a user, e.g. to match their sign-in name
   souvenir users unlink NAME        forget a user's web sign-ins and end their sessions
   souvenir keys                     list registered SSH keys
   souvenir keys add NAME [KEY]      register a public key for a user; reads stdin without KEY
@@ -59,6 +60,11 @@ func runManage(ctx context.Context, accounts *users.Store, args []string) error 
 			return fmt.Errorf("%s", usage)
 		}
 		return accounts.Remove(ctx, args[2])
+	case "users rename":
+		if len(args) != 4 {
+			return fmt.Errorf("%s", usage)
+		}
+		return accounts.Rename(ctx, args[2], args[3])
 	case "users unlink":
 		if len(args) != 3 {
 			return fmt.Errorf("%s", usage)

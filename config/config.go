@@ -34,7 +34,7 @@ type Config struct {
 }
 
 type WebConfig struct {
-	Listen string
+	Listen      string
 	BaseUrl     string
 	SessionDays int
 }
@@ -43,7 +43,7 @@ type OidcConfig struct {
 	Issuer       string
 	ClientId     string
 	ClientSecret string
-	MatchClaim string
+	MatchClaim   string
 }
 
 type FetchConfig struct {
