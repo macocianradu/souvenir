@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,13 +34,20 @@ func New(pool *pgxpool.Pool, cfg config.DbConfig) *DbClient {
 func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conversation, error) {
 	cl.logger.Debug("Searching for conversation", "id", id)
 	var conv model.Conversation
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return conv, err
+	}
 	if err := cl.pool.QueryRow(ctx,
 		`
 		SELECT id, COALESCE(title, ''), COALESCE(title_source, ''), COALESCE(summary, '')
 		  FROM conversations
-		 WHERE id = $1
-		`, id).Scan(&conv.Id, &conv.Title, &conv.TitleSource, &conv.Summary); err != nil {
+		 WHERE id = $1 AND user_id = $2
+		`, id, userId).Scan(&conv.Id, &conv.Title, &conv.TitleSource, &conv.Summary); err != nil {
 		cl.logger.Error("Could not fetch conversation", "id", id, "error", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return conv, fmt.Errorf("conversation %s not found", id)
+		}
 		return conv, err
 	}
 	rows, err := cl.pool.Query(ctx,
@@ -122,7 +130,11 @@ func (cl DbClient) loadImages(ctx context.Context, conv *model.Conversation) err
 }
 
 func (cl DbClient) DeleteConversation(ctx context.Context, id string) error {
-	tag, err := cl.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1`, id)
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return err
+	}
+	tag, err := cl.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1 AND user_id = $2`, id, userId)
 	if err != nil {
 		cl.logger.Error("Could not delete conversation", "id", id, "error", err)
 		return err
@@ -134,21 +146,33 @@ func (cl DbClient) DeleteConversation(ctx context.Context, id string) error {
 }
 
 func (cl DbClient) SaveContextSummary(ctx context.Context, conversationId string, summary model.ContextSummary) error {
-	_, err := cl.pool.Exec(ctx,
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return err
+	}
+	tag, err := cl.pool.Exec(ctx,
 		`
 		INSERT INTO conversation_summaries (conversation_id, through_seq, content)
-		     VALUES ($1, $2, $3)
+		     SELECT id, $2, $3 FROM conversations WHERE id = $1 AND user_id = $4
 		ON CONFLICT (conversation_id, through_seq) DO UPDATE
 		        SET content = EXCLUDED.content
-		`, conversationId, summary.ThroughSeq, summary.Content)
+		`, conversationId, summary.ThroughSeq, summary.Content, userId)
 	if err != nil {
 		cl.logger.Error("Could not save context summary", "conversation_id", conversationId, "error", err)
+		return err
 	}
-	return err
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("conversation %s not found", conversationId)
+	}
+	return nil
 }
 
 func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, error) {
 	cl.logger.Debug("Fetching conversations")
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := cl.pool.Query(ctx,
 		`
 		   SELECT c.id, COALESCE(c.title, ''), COALESCE(c.summary, ''), COALESCE(first.content, '')
@@ -160,9 +184,10 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 		            ORDER BY m.seq
 		               LIMIT 1
 		          ) first ON true
-		    WHERE COALESCE(c.title, '') <> '' OR first.content IS NOT NULL
+		    WHERE c.user_id = $1
+		      AND (COALESCE(c.title, '') <> '' OR first.content IS NOT NULL)
 		 ORDER BY c.updated_at DESC
-		`)
+		`, userId)
 	if err != nil {
 		cl.logger.Error("Could not fetch conversations", "error", err)
 		return nil, err
@@ -188,6 +213,10 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation) (model.Conversation, error) {
 	cl.logger.Debug("Saving conversation", "id", conv.Id, "messages", len(conv.Messages))
 	conv.Messages = slices.Clone(conv.Messages)
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return conv, err
+	}
 
 	tx, err := cl.pool.Begin(ctx)
 	if err != nil {
@@ -198,24 +227,28 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 	if conv.Id == "" {
 		if err := tx.QueryRow(ctx,
 			`
-			INSERT INTO conversations (title, title_source, summary)
-			     VALUES ($1, NULLIF($2, ''), $3)
+			INSERT INTO conversations (title, title_source, summary, user_id)
+			     VALUES ($1, NULLIF($2, ''), $3, $4)
 			  RETURNING id
 			`,
-			conv.Title, conv.TitleSource, conv.Summary).Scan(&conv.Id); err != nil {
+			conv.Title, conv.TitleSource, conv.Summary, userId).Scan(&conv.Id); err != nil {
 			cl.logger.Error("Could not create conversation", "title", conv.Title, "error", err)
 			return conv, fmt.Errorf("create conversation: %w", err)
 		}
 	} else {
-		if _, err := tx.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`
 			UPDATE conversations
 			   SET title = $1, title_source = NULLIF($2, ''), summary = $3, updated_at = now()
-			 WHERE id = $4
+			 WHERE id = $4 AND user_id = $5
 			`,
-			conv.Title, conv.TitleSource, conv.Summary, conv.Id); err != nil {
+			conv.Title, conv.TitleSource, conv.Summary, conv.Id, userId)
+		if err != nil {
 			cl.logger.Error("Could not update conversation", "id", conv.Id, "error", err)
 			return conv, fmt.Errorf("update conversation: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return conv, fmt.Errorf("conversation %s not found", conv.Id)
 		}
 	}
 

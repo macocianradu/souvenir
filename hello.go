@@ -19,6 +19,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
@@ -53,6 +54,15 @@ func main() {
 	}
 	defer pool.Close()
 
+	accounts := users.NewStore(pool)
+	if len(os.Args) > 1 && (os.Args[1] == "users" || os.Args[1] == "keys") {
+		os.Exit(manage(ctx, accounts, os.Args[1:]))
+	}
+	owner, err := accounts.Owner(ctx)
+	if err != nil {
+		fatal("No owner", err)
+	}
+
 	embedder := llm.NewEmbedder(config.Embedding)
 	store, err := embed.NewEmbedStore(ctx, pool, config.Db.DbName, *embedder)
 	if err != nil {
@@ -74,7 +84,7 @@ func main() {
 		if err != nil {
 			logger.Error("Calendars disabled", "error", err)
 		} else {
-			toolset = append(toolset, tools.CalendarTools(calendars)...)
+			toolset = append(toolset, tools.ForUser(owner.Id, tools.CalendarTools(calendars)...)...)
 		}
 	}
 	if config.WebSearch.Url != "" {
@@ -101,16 +111,16 @@ func main() {
 
 	switch mode := strings.Join(os.Args[1:], " "); mode {
 	case "":
-		p := tea.NewProgram(a.newModel(ctx, false))
+		p := tea.NewProgram(a.newModel(users.WithUser(ctx, owner), false))
 		if _, err := p.Run(); err != nil {
 			fatal("Alas, there's been an error", err)
 		}
 	case "serve":
-		if err := serve(ctx, config.Ssh, func(ctx context.Context) tea.Model { return a.newModel(ctx, true) }); err != nil {
+		if err := serve(ctx, config.Ssh, accounts, func(ctx context.Context) tea.Model { return a.newModel(ctx, true) }); err != nil {
 			fatal("SSH server error", err)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\nusage: souvenir [serve]\n", mode)
+		fmt.Fprintf(os.Stderr, "unknown command %q\n%s", mode, usage)
 		os.Exit(2)
 	}
 }

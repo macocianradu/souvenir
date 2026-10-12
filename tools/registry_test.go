@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
@@ -63,12 +64,28 @@ func TestCall_EmptyArgumentsBecomeAnEmptyObject(t *testing.T) {
 
 func TestSpecs_DescribeEachToolAsAFunction(t *testing.T) {
 	var seen json.RawMessage
-	specs := echoRegistry(&seen).Specs()
+	specs := echoRegistry(&seen).Specs(context.Background())
 	if len(specs) != 1 || specs[0].Type != "function" || specs[0].Function.Name != "echo" {
 		t.Fatalf("%+v", specs)
 	}
 	var none *Registry
-	if none.Specs() != nil {
+	if none.Specs(context.Background()) != nil {
 		t.Fatal("a nil registry offers no tools")
+	}
+}
+
+func TestForUser_HidesAndRefusesTheToolForOthers(t *testing.T) {
+	var seen json.RawMessage
+	r := NewRegistry(ForUser("owner-id", echoRegistry(&seen).tools...)...)
+	owner := users.WithUser(context.Background(), users.User{Id: "owner-id"})
+	other := users.WithUser(context.Background(), users.User{Id: "other-id"})
+	if len(r.Specs(owner)) != 1 || len(r.Specs(other)) != 0 {
+		t.Fatal("the tool is offered to the wrong users")
+	}
+	if got := r.Call(other, call("echo", "{}")); !strings.Contains(got.Content, "unknown tool") || seen != nil {
+		t.Fatalf("another user ran the tool: %+v", got)
+	}
+	if got := r.Call(owner, call("echo", "{}")); got.Content != "ok" {
+		t.Fatalf("%+v", got)
 	}
 }

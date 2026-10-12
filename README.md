@@ -147,6 +147,23 @@ fetched page cannot turn up in every later search. Exact search is fine at this
 scale; an ANN index only starts earning its keep somewhere north of 100k
 chunks.
 
+### Users
+
+Conversations and memories belong to a user. The user travels in the request
+context (`users.WithUser`), and every store method reads it through one
+helper, `users.Id`, and filters by it; a call without a user is refused rather
+than seeing everything. Messages, chunks, summaries and images are reached only
+through a conversation the user owns. Both legs of hybrid search filter by user
+before their candidate limit, so a nearest-neighbour query cannot fill its
+quota with someone else's rows and come back empty. Another user's conversation
+or memory is reported as not found. The same memory text can be saved by two
+users. Tools set up for one person, like the calendars, are offered only to
+that user (`tools.ForUser`).
+
+The migration that added users created `owner`, an admin who inherited
+everything written before. The local TUI runs as the owner, and the last admin
+cannot be removed.
+
 ## Planned
 
 Roughly the order things are expected to land in.
@@ -172,15 +189,16 @@ covered by exceptions), and moving an event between calendars.
 
 ### Other frontends
 
-The TUI is served over SSH (`souvenir serve`); for now every authorized key is
-the same single user. Still to come: a small embedded web frontend sharing the same core. Both reachable from outside the
+The TUI is served over SSH (`souvenir serve`). Still to come: a small embedded
+web frontend sharing the same core (the `agent` package). Both reachable from outside the
 home network behind a reverse proxy, with the origin locked to the proxy and
 client addresses trusted from a header only when the request actually came
 through it.
 
-### Multiple users
+### Logins
 
-One user identity with credentials attached to it. A local password, an OIDC
+Users and SSH keys exist (see Users above); web logins do not yet. One user
+identity with credentials attached to it. A local password, an OIDC
 login and an SSH key are all just credentials pointing at the same user, so
 linking two logins is linking two credentials rather than a special case.
 
@@ -190,11 +208,9 @@ reassigned. Matching on a claim happens once when an unknown login first
 appears, with a uniqueness check so an ambiguous match cannot become an account
 takeover. Sessions live in Postgres so they can be revoked.
 
-Every owned row carries a user id and every access decision goes through one
-scoping helper rather than being open-coded across dozens of queries. Vector
-search needs particular care here: the user filter has to apply before the
-limit, or a nearest-neighbour query happily returns someone else's rows.
-Organizations and teams are deliberately left for later.
+Calendars are configured for one person, so they are offered only to the owner
+until each user can have their own. Organizations and teams are deliberately
+left for later.
 
 ## Configuration
 
@@ -308,14 +324,24 @@ Needs Go 1.26.8 or newer and a reachable Postgres with the `vector` extension
 available. The database and tables are created on first run.
 
 ```sh
-go run .          # the TUI in this terminal
+go run .          # the TUI in this terminal, as the owner
 go run . serve    # the TUI over SSH
+
+go run . users                      # list users
+go run . users add NAME [admin]     # add a user
+go run . users remove NAME          # remove a user and everything they own
+go run . keys                       # list registered SSH keys
+go run . keys add NAME < id.pub     # register a key (or pass it after NAME)
+go run . keys remove SHA256:...     # remove a key
 ```
 
 `serve` hosts the same TUI over SSH with [wish](https://github.com/charmbracelet/wish),
 one session per connection, all sharing the database and the background
-embedding. Only keys listed in `Ssh.AuthorizedKeys` (default `authorized_keys`,
-in OpenSSH format) can connect, and it refuses to start without that file. The
+embedding. A key registered with `keys add` logs in as its user. A key listed in
+`Ssh.AuthorizedKeys` (default `authorized_keys`, in OpenSSH format) logs in as
+the owner; the file is read on each login, so deleting a line revokes it. Set
+it to `""` to allow registered keys only; when set, it refuses to start
+without the file. Any other key is refused. The
 host key is generated on first start at `Ssh.HostKeyPath` (default
 `.ssh/souvenir_ed25519`) and must persist, or clients will see it change.
 

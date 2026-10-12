@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -55,19 +56,23 @@ func (s *Store) Save(ctx context.Context, content, conversationId string) (Memor
 	hash := sha256.Sum256([]byte(content))
 	var m Memory
 	var created bool
-	err := s.pool.QueryRow(ctx,
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return m, false, err
+	}
+	err = s.pool.QueryRow(ctx,
 		`
 		WITH inserted AS (
-			INSERT INTO memories (content, content_hash, source_conversation_id)
-			     VALUES ($1, $2, NULLIF($3, '')::uuid)
-			ON CONFLICT (content_hash) DO NOTHING
+			INSERT INTO memories (content, content_hash, source_conversation_id, user_id)
+			     VALUES ($1, $2, (SELECT id FROM conversations WHERE id = NULLIF($3, '')::uuid AND user_id = $4), $4)
+			ON CONFLICT (user_id, content_hash) DO NOTHING
 			  RETURNING id, content, created_at
 		)
 		SELECT id, content, created_at, true FROM inserted
 		 UNION ALL
-		SELECT id, content, created_at, false FROM memories WHERE content_hash = $2
+		SELECT id, content, created_at, false FROM memories WHERE user_id = $4 AND content_hash = $2
 		 LIMIT 1
-		`, content, hex.EncodeToString(hash[:]), conversationId).Scan(&m.Id, &m.Content, &m.CreatedAt, &created)
+		`, content, hex.EncodeToString(hash[:]), conversationId, userId).Scan(&m.Id, &m.Content, &m.CreatedAt, &created)
 	if err != nil {
 		s.logger.Error("Could not save memory", "error", err)
 		return m, false, err
@@ -84,13 +89,17 @@ func (s *Store) Update(ctx context.Context, id, content string) (Memory, error) 
 	content = strings.TrimSpace(content)
 	hash := sha256.Sum256([]byte(content))
 	var m Memory
-	err := s.pool.QueryRow(ctx,
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return m, err
+	}
+	err = s.pool.QueryRow(ctx,
 		`
 		   UPDATE memories
 		      SET content = $2, content_hash = $3
-		    WHERE id = $1
+		    WHERE id = $1 AND user_id = $4
 		RETURNING id, content, created_at
-		`, id, content, hex.EncodeToString(hash[:])).Scan(&m.Id, &m.Content, &m.CreatedAt)
+		`, id, content, hex.EncodeToString(hash[:]), userId).Scan(&m.Id, &m.Content, &m.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, fmt.Errorf("no memory with id %s", id)
 	}
@@ -107,7 +116,11 @@ func (s *Store) Update(ctx context.Context, id, content string) (Memory, error) 
 }
 
 func (s *Store) Forget(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM memories WHERE id = $1`, id)
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM memories WHERE id = $1 AND user_id = $2`, id, userId)
 	if err != nil {
 		return err
 	}
@@ -118,7 +131,11 @@ func (s *Store) Forget(ctx context.Context, id string) error {
 }
 
 func (s *Store) List(ctx context.Context) ([]Memory, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, content, created_at FROM memories ORDER BY created_at DESC`)
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, content, created_at FROM memories WHERE user_id = $1 ORDER BY created_at DESC`, userId)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +143,11 @@ func (s *Store) List(ctx context.Context) ([]Memory, error) {
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, error) {
-	args := []any{query, limit}
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := []any{query, limit, userId}
 	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank WHERE false`
 	if s.embedder != nil {
 		vec, err := s.embedder.EmbedQuery(ctx, query)
@@ -139,13 +160,14 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, 
 				  FROM (
 					  SELECT id, distance, min(distance) OVER () AS best
 					    FROM (
-					  SELECT v.memory_id AS id, v.embedding <=> $3 AS distance
+					  SELECT v.memory_id AS id, v.embedding <=> $4 AS distance
 					    FROM %s v
 					    JOIN memories m ON m.id = v.memory_id AND m.content_hash = v.content_hash
-					   WHERE $4::float8 = 0 OR v.embedding <=> $3 <= $4
+					   WHERE m.user_id = $3
+					     AND ($5::float8 = 0 OR v.embedding <=> $4 <= $5)
 					) nearest
 				  ) scored
-				 WHERE $5::float8 = 0 OR distance <= best + $5`, s.tableName)
+				 WHERE $6::float8 = 0 OR distance <= best + $6`, s.tableName)
 		}
 	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
@@ -153,6 +175,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, 
 			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank
 			  FROM memories m, websearch_to_tsquery('english', $1) q
 			 WHERE m.tsv @@ q
+			   AND m.user_id = $3
 		),
 		vector AS (%s),
 		fused AS (

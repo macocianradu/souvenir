@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/db/embed"
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
@@ -50,8 +51,12 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 	if opts.Limit <= 0 {
 		opts.Limit = 20
 	}
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return nil, err
+	}
 	candidates := max(opts.Limit*4, 50)
-	args := []any{query, nullable(opts.ConversationId), candidates, opts.Limit, nullable(opts.ExcludeConversationId)}
+	args := []any{query, nullable(opts.ConversationId), candidates, opts.Limit, nullable(opts.ExcludeConversationId), userId}
 	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank WHERE false`
 	if s.store != nil {
 		vec, err := s.store.EmbedQuery(ctx, query)
@@ -64,27 +69,32 @@ func (s Searcher) Search(ctx context.Context, query string, opts Options) ([]Hit
 				  FROM (
 					  SELECT message_id, distance, min(distance) OVER () AS best
 					    FROM (
-					  SELECT mc.message_id, min(v.embedding <=> $6) AS distance
+					  SELECT mc.message_id, min(v.embedding <=> $7) AS distance
 					    FROM %s v
 					    JOIN message_chunks mc
 					      ON mc.id = v.chunk_id AND mc.content_hash = v.content_hash
-					   WHERE ($2::uuid IS NULL OR mc.conversation_id = $2)
+					    JOIN conversations c ON c.id = mc.conversation_id
+					   WHERE c.user_id = $6
+					     AND ($2::uuid IS NULL OR mc.conversation_id = $2)
 					     AND ($5::uuid IS NULL OR mc.conversation_id <> $5)
 					GROUP BY mc.message_id
-					  HAVING $7::float8 = 0 OR min(v.embedding <=> $6) <= $7
+					  HAVING $8::float8 = 0 OR min(v.embedding <=> $7) <= $8
 					ORDER BY distance
 					   LIMIT $3
 					    ) nearest
 				  ) scored
-				 WHERE $8::float8 = 0 OR distance <= best + $8`, s.store.TableName())
+				 WHERE $9::float8 = 0 OR distance <= best + $9`, s.store.TableName())
 		}
 	}
 
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		WITH keyword AS (
 			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank
-			  FROM messages m, websearch_to_tsquery('english', $1) q
+			  FROM messages m
+			  JOIN conversations c ON c.id = m.conversation_id,
+			       websearch_to_tsquery('english', $1) q
 			 WHERE m.tsv @@ q
+			   AND c.user_id = $6
 			   AND m.role IN ('user', 'assistant')
 			   AND ($2::uuid IS NULL OR m.conversation_id = $2)
 			   AND ($5::uuid IS NULL OR m.conversation_id <> $5)

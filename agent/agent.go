@@ -141,7 +141,7 @@ func (t *turn) recall(ctx context.Context) {
 }
 
 func (t *turn) stream(ctx context.Context) ([]model.Message, error) {
-	ch, err := t.client.QueryStream(ctx, t.context(), t.agent.tools.Specs())
+	ch, err := t.client.QueryStream(ctx, t.context(), t.agent.tools.Specs(ctx))
 	if err != nil {
 		return nil, err
 	}

@@ -94,6 +94,35 @@ var migrations = []string{
 		PRIMARY KEY (message_id, position)
 	);
 	`,
+	`
+	CREATE TABLE users (
+		id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name       TEXT NOT NULL UNIQUE,
+		is_admin   BOOLEAN NOT NULL DEFAULT false,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
+	INSERT INTO users (name, is_admin) VALUES ('owner', true);
+
+	CREATE TABLE ssh_keys (
+		fingerprint TEXT PRIMARY KEY,
+		user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		public_key  TEXT NOT NULL,
+		comment     TEXT NOT NULL DEFAULT '',
+		created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
+	CREATE INDEX ssh_keys_user_id_idx ON ssh_keys (user_id);
+
+	ALTER TABLE conversations ADD COLUMN user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+	UPDATE conversations SET user_id = (SELECT id FROM users);
+	ALTER TABLE conversations ALTER COLUMN user_id SET NOT NULL;
+	CREATE INDEX conversations_user_id_updated_at_idx ON conversations (user_id, updated_at DESC);
+
+	ALTER TABLE memories ADD COLUMN user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+	UPDATE memories SET user_id = (SELECT id FROM users);
+	ALTER TABLE memories ALTER COLUMN user_id SET NOT NULL;
+	ALTER TABLE memories DROP CONSTRAINT memories_content_hash_key;
+	ALTER TABLE memories ADD CONSTRAINT memories_user_id_content_hash_key UNIQUE (user_id, content_hash);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {
