@@ -320,3 +320,47 @@ func TestSidebar_GroupsByLastUpdate(t *testing.T) {
 		t.Fatalf("%s", strings.Join(got, " "))
 	}
 }
+
+func TestManifest_MakesTheSiteInstallable(t *testing.T) {
+	h := newHarness(t)
+	w := h.get(nil, "/manifest.webmanifest")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/manifest+json" {
+		t.Fatalf("%d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	var m struct {
+		StartUrl string `json:"start_url"`
+		Display  string
+		Icons    []struct{ Src, Sizes, Purpose string }
+	}
+	if err := json.NewDecoder(w.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.StartUrl != "/" || m.Display != "standalone" {
+		t.Fatalf("%+v", m)
+	}
+	have := map[string]bool{}
+	for _, icon := range m.Icons {
+		have[icon.Sizes+" "+icon.Purpose] = true
+		if asset := h.get(nil, icon.Src); asset.Code != http.StatusOK || asset.Header().Get("Content-Type") != "image/png" {
+			t.Errorf("icon %s: %d %q", icon.Src, asset.Code, asset.Header().Get("Content-Type"))
+		}
+	}
+	for _, want := range []string{"192x192 any", "512x512 any", "512x512 maskable"} {
+		if !have[want] {
+			t.Errorf("no %s icon", want)
+		}
+	}
+
+	page := h.get(nil, "/").Body.String()
+	for _, want := range []string{`rel="manifest" href="/manifest.webmanifest"`, `rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=`, `name="apple-mobile-web-app-title" content="Souvenir"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page lacks %s", want)
+		}
+	}
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "manifest-src 'self'") {
+		t.Error("the policy blocks the manifest")
+	}
+	if a := h.get(nil, "/static/apple-touch-icon.png"); a.Code != http.StatusOK {
+		t.Errorf("apple touch icon: %d", a.Code)
+	}
+}

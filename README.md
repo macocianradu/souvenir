@@ -157,8 +157,7 @@ through a conversation the user owns. Both legs of hybrid search filter by user
 before their candidate limit, so a nearest-neighbour query cannot fill its
 quota with someone else's rows and come back empty. Another user's conversation
 or memory is reported as not found. The same memory text can be saved by two
-users. Tools set up for one person, like the calendars, are offered only to
-that user (`tools.ForUser`).
+users. Each user also has their own calendars (see Calendars).
 
 The migration that added users created `owner`, an admin who inherited
 everything written before. The local TUI runs as the owner, and the last admin
@@ -199,9 +198,7 @@ header only when the request came through it.
 SSH keys and OIDC sign-ins exist. Still to come: a local password, and signing
 out at the provider too (RP-initiated logout).
 
-Calendars are configured for one person, so they are offered only to the owner
-until each user can have their own. Organizations and teams are deliberately
-left for later.
+Organizations and teams are deliberately left for later.
 
 ## Configuration
 
@@ -262,9 +259,16 @@ XML are read; anything else is refused.
                "Write": ["assistant"], "Timezone": "Europe/Brussels" }
 ```
 
-`Path` is a `vdirsyncer` filesystem storage: one subdirectory per calendar, one
-`.ics` file per event. Environment variables in it are expanded (`~` is not),
-and it must exist at startup or the calendar tools are disabled. The app never speaks CalDAV; it reads and writes those
+`Path` is the base directory, holding one directory per user, named after the
+user: `<Path>/<user>/<calendar>/<event>.ics`. Each user's directory is a
+`vdirsyncer` filesystem storage: one subdirectory per calendar, one `.ics` file
+per event. The tools only ever see the directory of the user they run for, and
+a user name that is not a plain directory name is refused. A user without a
+directory is not offered the calendar tools at all. `Read` and
+`Write` name the calendars within each user's directory, the same for everyone.
+Renaming a user (`souvenir users rename`) means renaming their directory too.
+Environment variables in `Path` are expanded (`~` is not), and it must exist at
+startup or the calendar tools are disabled. The app never speaks CalDAV; it reads and writes those
 files and leaves syncing to `vdirsyncer`. Only calendars named in `Read` or
 `Write` are visible to the model, and every tool call is checked against them
 again: `Read` allows `calendar_list` (a day, Monday-to-Sunday week or month,

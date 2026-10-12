@@ -1,11 +1,17 @@
 package tools
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db/users"
+	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
 func TestPeriod_WeeksRunMondayToSunday(t *testing.T) {
@@ -44,5 +50,39 @@ func TestFormatEvent_KeepsEachEventOnOneLine(t *testing.T) {
 		if got := formatEvent(ev); got != want {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
+	}
+}
+
+func TestCalendarTools_OfferedOnlyToUsersWithACalendarDirectory(t *testing.T) {
+	root := t.TempDir()
+	store, err := calendar.New(config.CalendarsConfig{Path: root, Write: []string{"assistant"}, Timezone: "Europe/Brussels"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(CalendarTools(store)...)
+	create := model.ToolCall{Id: "1", Function: model.FunctionCall{Name: "calendar_create", Arguments: `{"calendar":"assistant","summary":"Dentist","start":"2026-10-20T09:00"}`}}
+	dana := users.WithUser(context.Background(), users.User{Id: "1", Name: "dana"})
+	evil := users.WithUser(context.Background(), users.User{Id: "2", Name: ".."})
+
+	for name, ctx := range map[string]context.Context{"no user": context.Background(), "dana without a directory": dana, "a user named ..": evil} {
+		if specs := r.Specs(ctx); len(specs) != 0 {
+			t.Errorf("%s is offered %d calendar tools", name, len(specs))
+		}
+		if got := r.Call(ctx, create); !strings.Contains(got.Content, "unknown tool") {
+			t.Errorf("%s ran the tool: %s", name, got.Content)
+		}
+	}
+
+	if err := os.Mkdir(filepath.Join(root, "dana"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if specs := r.Specs(dana); len(specs) != 6 {
+		t.Fatalf("dana is offered %d calendar tools", len(specs))
+	}
+	if got := r.Call(dana, create); strings.HasPrefix(got.Content, "Error") {
+		t.Fatal(got.Content)
+	}
+	if files, _ := filepath.Glob(filepath.Join(root, "dana", "assistant", "*.ics")); len(files) != 1 {
+		t.Fatalf("dana's directory has %d events", len(files))
 	}
 }

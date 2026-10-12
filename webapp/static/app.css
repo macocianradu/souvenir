@@ -138,7 +138,7 @@ svg {
 body.plain {
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
 }
 
 .card {
@@ -592,7 +592,7 @@ body.plain {
     inset: 0 auto 0 0;
     z-index: 20;
     width: min(300px, 84vw);
-    padding: 20px 16px;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
     background: var(--bg);
     box-shadow: 8px 0 24px var(--shadow-dark);
     transform: translateX(-105%);
@@ -610,7 +610,8 @@ body.plain {
   }
 
   .main { height: 100dvh; border-radius: 0; box-shadow: none; }
-  .topbar { padding: 14px 16px 8px; }
+  /* Added to the home screen, the page runs under the status bar. */
+  .topbar { padding: max(14px, env(safe-area-inset-top)) 16px 8px; }
   .topbar h1 { display: none; }
   .menu, .new-mobile { display: inline-grid; }
   .model { margin: 0 auto; max-width: 60%; }

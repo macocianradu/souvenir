@@ -376,3 +376,34 @@ func TestWrite_RefusesOccurrencesLongerThanTheirRepeat(t *testing.T) {
 		t.Fatal("stretching an occurrence past the next one was accepted")
 	}
 }
+
+func TestFor_EachUserHasTheirOwnDirectory(t *testing.T) {
+	base := newStore(t, map[string]string{"alice/work/a.ics": weekly})
+	alice, err := base.For("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, _ := base.For("bob")
+	if events, err := alice.Between(nil, day(2026, 10, 1), day(2026, 11, 1)); err != nil || len(events) == 0 {
+		t.Fatalf("alice sees %d events: %v", len(events), err)
+	}
+	if events, err := bob.Between(nil, day(2026, 10, 1), day(2026, 11, 1)); err != nil || len(events) != 0 {
+		t.Fatalf("bob, who has no directory yet, sees %d events: %v", len(events), err)
+	}
+	summary, start := "Dentist", "2026-10-20T09:00"
+	ev, err := bob.Create("assistant", Changes{Summary: &summary, Start: &start})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base.root, "bob", "assistant", ev.Uid+".ics")); err != nil {
+		t.Fatal("the event is not in bob's directory:", err)
+	}
+	if _, err := alice.Get("assistant", ev.Uid); err == nil {
+		t.Fatal("alice can read bob's event")
+	}
+	for _, name := range []string{"", ".", "..", "../alice", "a/b", `a\b`, "/abs"} {
+		if _, err := base.For(name); err == nil {
+			t.Errorf("%q accepted as a user directory", name)
+		}
+	}
+}

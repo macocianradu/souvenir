@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -44,6 +45,41 @@ var staticVersions = func() map[string]string {
 
 func staticURL(name string) string {
 	return "/static/" + name + "?v=" + staticVersions[name]
+}
+
+const (
+	lightBackground = "#e5e9f0"
+	darkBackground  = "#23272f"
+)
+
+// manifest lets phones add the site to the home screen as an app of its
+// own. Android reads it; iOS takes the icon and title from the page's head.
+func manifest(w http.ResponseWriter, r *http.Request) {
+	type icon struct {
+		Src     string `json:"src"`
+		Sizes   string `json:"sizes"`
+		Type    string `json:"type"`
+		Purpose string `json:"purpose"`
+	}
+	var icons []icon
+	for _, purpose := range []string{"any", "maskable"} {
+		for _, size := range []string{"192", "512"} {
+			icons = append(icons, icon{Src: staticURL("icon-" + size + ".png"), Sizes: size + "x" + size, Type: "image/png", Purpose: purpose})
+		}
+	}
+	w.Header().Set("Content-Type", "application/manifest+json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":               "/",
+		"name":             "Souvenir",
+		"short_name":       "Souvenir",
+		"description":      "Your assistant, with a memory.",
+		"start_url":        "/",
+		"scope":            "/",
+		"display":          "standalone",
+		"background_color": lightBackground,
+		"theme_color":      lightBackground,
+		"icons":            icons,
+	})
 }
 
 func staticHandler() http.Handler {

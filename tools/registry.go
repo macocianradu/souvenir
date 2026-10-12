@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
@@ -16,21 +15,11 @@ type Tool struct {
 	Description string
 	Parameters  json.RawMessage
 	Run         func(ctx context.Context, args json.RawMessage) (string, error)
-	For         func(ctx context.Context) bool
+	Available func(ctx context.Context) bool
 }
 
-func (t Tool) offered(ctx context.Context) bool {
-	return t.For == nil || t.For(ctx)
-}
-
-func ForUser(userId string, ts ...Tool) []Tool {
-	for i := range ts {
-		ts[i].For = func(ctx context.Context) bool {
-			u, ok := users.FromContext(ctx)
-			return ok && u.Id == userId
-		}
-	}
-	return ts
+func (t Tool) available(ctx context.Context) bool {
+	return t.Available == nil || t.Available(ctx)
 }
 
 type Registry struct {
@@ -57,7 +46,7 @@ func (r *Registry) Specs(ctx context.Context) []llm.ToolSpec {
 	}
 	specs := make([]llm.ToolSpec, 0, len(r.tools))
 	for _, t := range r.tools {
-		if !t.offered(ctx) {
+		if !t.available(ctx) {
 			continue
 		}
 		specs = append(specs, llm.ToolSpec{
@@ -71,7 +60,7 @@ func (r *Registry) Specs(ctx context.Context) []llm.ToolSpec {
 func (r *Registry) Call(ctx context.Context, call model.ToolCall) model.Message {
 	result := model.Message{Role: "tool", ToolCallId: call.Id}
 	tool, ok := r.byName[call.Function.Name]
-	if !ok || !tool.offered(ctx) {
+	if !ok || !tool.available(ctx) {
 		result.Content = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 		return result
 	}

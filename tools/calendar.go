@@ -9,18 +9,19 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/calendar"
+	"git.estatecloud.org/radumaco/souvenir/db/users"
 )
 
 const timeHelp = "YYYY-MM-DDTHH:MM in the user's timezone, or YYYY-MM-DD for an all-day event"
 
-func CalendarTools(store *calendar.Store) []Tool {
-	readable, writable := store.Readable(), store.Writable()
+func CalendarTools(base *calendar.Store) []Tool {
+	readable, writable := base.Readable(), base.Writable()
 	if len(readable) == 0 {
 		return nil
 	}
 	readEnum, _ := json.Marshal(readable)
 	writeEnum, _ := json.Marshal(writable)
-	zone := store.Location().String()
+	zone := base.Location().String()
 
 	tools := []Tool{
 		{
@@ -37,6 +38,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				}
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Period    string   `json:"period"`
 					Date      string   `json:"date"`
@@ -82,6 +87,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				"required": ["query"]
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Query     string   `json:"query"`
 					From      string   `json:"from"`
@@ -94,7 +103,6 @@ func CalendarTools(store *calendar.Store) []Tool {
 				}
 				today := startOfDay(store.Now())
 				from, to := today, today.AddDate(2, 0, 1)
-				var err error
 				if args.From != "" {
 					if from, err = day(store, args.From); err != nil {
 						return "", err
@@ -136,6 +144,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -152,10 +164,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 		},
 	}
 	if len(writable) == 0 {
-		return tools
+		return withCalendarDirectory(base, tools)
 	}
 
-	return append(tools,
+	return withCalendarDirectory(base, append(tools,
 		Tool{
 			Name: "calendar_create",
 			Description: "Add an event to one of the user's calendars. Without an end, a timed event lasts an " +
@@ -175,6 +187,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				"required": ["calendar", "summary", "start"]
 			}`, writeEnum, timeHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					changeArgs
@@ -210,6 +226,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, writeEnum, timeHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -238,6 +258,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, writeEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				store, err := userCalendars(ctx, base)
+				if err != nil {
+					return "", err
+				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -251,7 +275,17 @@ func CalendarTools(store *calendar.Store) []Tool {
 				return "Deleted.", nil
 			},
 		},
-	)
+	))
+}
+
+func withCalendarDirectory(base *calendar.Store, ts []Tool) []Tool {
+	for i := range ts {
+		ts[i].Available = func(ctx context.Context) bool {
+			store, err := userCalendars(ctx, base)
+			return err == nil && store.Exists()
+		}
+	}
+	return ts
 }
 
 type changeArgs struct {
@@ -278,6 +312,14 @@ func (a changeArgs) changes() calendar.Changes {
 
 func startOfDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func userCalendars(ctx context.Context, base *calendar.Store) (*calendar.Store, error) {
+	u, ok := users.FromContext(ctx)
+	if !ok {
+		return nil, errors.New("no user for this request")
+	}
+	return base.For(u.Name)
 }
 
 func day(store *calendar.Store, v string) (time.Time, error) {

@@ -71,6 +71,21 @@ func New(cfg config.CalendarsConfig) (*Store, error) {
 	return &Store{root: root, loc: loc, readable: readable, writable: cfg.Write, now: time.Now}, nil
 }
 
+func (s *Store) For(user string) (*Store, error) {
+	if user == "." || strings.ContainsAny(user, `/\`) || !filepath.IsLocal(user) {
+		return nil, fmt.Errorf("the user name %q cannot be a calendar directory", user)
+	}
+	c := *s
+	c.root = filepath.Join(s.root, user)
+	return &c, nil
+}
+
+// Exists says whether the store's directory is there.
+func (s *Store) Exists() bool {
+	info, err := os.Stat(s.root)
+	return err == nil && info.IsDir()
+}
+
 func (s *Store) Location() *time.Location { return s.loc }
 
 func (s *Store) Now() time.Time { return s.now().In(s.loc) }
@@ -583,6 +598,9 @@ func (s *Store) applyTimes(comp *ical.Component, startArg, endArg *string) error
 func write(path string, cal *ical.Calendar) error {
 	var buf bytes.Buffer
 	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")

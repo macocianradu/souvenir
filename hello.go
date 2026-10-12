@@ -88,7 +88,7 @@ func main() {
 		if err != nil {
 			logger.Error("Calendars disabled", "error", err)
 		} else {
-			toolset = append(toolset, tools.ForUser(owner.Id, tools.CalendarTools(calendars)...)...)
+			toolset = append(toolset, tools.CalendarTools(calendars)...)
 		}
 	}
 	if config.WebSearch.Url != "" {

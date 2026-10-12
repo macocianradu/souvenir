@@ -4,7 +4,15 @@
 <meta name="color-scheme" content="light dark">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
 <title>{{if .}}{{.}} · {{end}}Souvenir</title>
+<meta name="theme-color" content="#e5e9f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#23272f" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Souvenir">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="{{static "icon.svg"}}">
+<link rel="apple-touch-icon" href="{{static "apple-touch-icon.png"}}">
 <link rel="stylesheet" href="{{static "app.css"}}">
 <script src="{{static "htmx.min.js"}}" defer></script>
 <script src="{{static "app.js"}}" defer></script>
