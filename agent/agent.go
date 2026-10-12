@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 	"git.estatecloud.org/radumaco/souvenir/tools"
@@ -36,6 +37,7 @@ type Agent struct {
 	tools    *tools.Registry
 	memories *memory.Store
 	location *time.Location
+	settings *settings.Store
 }
 
 func New(registry *tools.Registry, memories *memory.Store, location *time.Location) *Agent {
@@ -50,14 +52,23 @@ func New(registry *tools.Registry, memories *memory.Store, location *time.Locati
 	}
 }
 
-// Run answers the last user message of conv. The client carries the model
-// and limits, so each frontend session can choose its own.
+func (a *Agent) WithSettings(store *settings.Store) *Agent {
+	a.settings = store
+	return a
+}
+
 func (a *Agent) Run(ctx context.Context, client llm.ChatClient, conv model.Conversation) <-chan Event {
-	// The frontend keeps changing its conversation while the turn runs.
 	conv.Messages = slices.Clone(conv.Messages)
 	events := make(chan Event)
 	go func() {
 		defer close(events)
+		if a.settings != nil {
+			chosen, err := a.settings.Get(ctx)
+			if err != nil {
+				a.logger.Warn("Could not read the user's settings, using the defaults", "error", err)
+			}
+			ctx = settings.WithSettings(ctx, chosen)
+		}
 		t := turn{agent: a, client: client, conv: conv, events: events}
 		if err := t.run(ctx); err != nil && ctx.Err() == nil {
 			t.send(ctx, Event{Err: err})
@@ -75,8 +86,6 @@ type turn struct {
 	trail    []model.Message
 }
 
-// send gives up once ctx is done, so the turn never blocks on a frontend
-// that stopped listening.
 func (t *turn) send(ctx context.Context, ev Event) bool {
 	select {
 	case t.events <- ev:

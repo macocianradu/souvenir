@@ -12,17 +12,26 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/agent"
+	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
+	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
 type App struct {
-	Config  config.Config
-	History *history.DbClient
-	Agent   *agent.Agent
+	Config   config.Config
+	History  *history.DbClient
+	Agent    *agent.Agent
+	Settings *settings.Store
+	Memories *memory.Store
+	Tools    *tools.Registry
+	// Calendars is nil when calendars are off.
+	Calendars *calendar.Store
 }
 
 const (
@@ -100,7 +109,7 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		Initials:     initials(u),
 		Conversation: conv,
 		Heading:      heading(conv),
-		Messages:     messageViews(conv.Messages),
+		Messages:     messageViews(conv.Messages, s.location),
 		Sidebar:      sidebar(list, conv.Id, time.Now().In(s.location)),
 		Models:       available,
 		Model:        s.chosenModel(r, available),
@@ -109,7 +118,7 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 	}
 	if t, ok := s.turns.running(u.Id, conv.Id); ok && conv.Id != "" {
 		st, _ := t.snapshot()
-		live := newLiveView(t, st)
+		live := s.liveView(t, st)
 		p.Live = &live
 	}
 	s.render(w, http.StatusOK, "chat", p)
@@ -205,9 +214,9 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	go s.runTurn(turnCtx, t, client, conv)
 	s.setCookie(w, modelCookie, client.Cfg.Llm.Model, 365*24*time.Hour)
 
-	view := sentView{User: messageViews(conv.Messages[len(conv.Messages)-1:])[0]}
+	view := sentView{User: messageViews(conv.Messages[len(conv.Messages)-1:], s.location)[0]}
 	st, _ := t.snapshot()
-	view.Live = newLiveView(t, st)
+	view.Live = s.liveView(t, st)
 	if list, err := s.app.History.GetConversations(ctx); err == nil {
 		view.Sidebar = sidebar(list, conv.Id, time.Now().In(s.location))
 	}
@@ -314,10 +323,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		st, changed := t.snapshot()
 		switch {
 		case st.Done && !sentDone:
-			send("done", s.renderString("live", newLiveView(t, st)))
+			send("done", s.renderString("live", s.liveView(t, st)))
 			sentDone = true
 		case !st.Done:
-			send("update", s.renderString("live-body", newLiveView(t, st)))
+			send("update", s.renderString("live-body", s.liveView(t, st)))
 		}
 		if st.Title != "" && !sentTitle {
 			send("title", st.Title)

@@ -1,9 +1,29 @@
+{{define "aside"}}  <aside class="sidebar">
+    <a class="brand" href="/" hx-boost="true"><span class="brand-dot" aria-hidden="true"></span>Souvenir</a>
+    <a class="new-chat" href="/" hx-boost="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat
+    </a>
+    <nav id="conversations" class="conversations" hx-boost="true" aria-label="Conversations">{{template "sidebar" .Sidebar}}</nav>
+    <div class="account">
+      <span class="avatar" aria-hidden="true">{{.Initials}}</span>
+      <span class="who">{{.User.Name}}</span>
+      <a class="icon-btn small" href="/settings" hx-boost="true" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </a>
+      <form method="post" action="/logout">
+        <button class="icon-btn small" type="submit" title="Sign out" aria-label="Sign out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M16 17l5-5-5-5M21 12H9"/></svg>
+        </button>
+      </form>
+    </div>
+  </aside>{{end}}
+
 {{define "sidebar"}}{{range .Groups}}
 <h2>{{.Label}}</h2>
 <ul>{{range .Items}}
   <li{{if .Active}} class="active"{{end}}>
     <a href="/c/{{.Id}}" title="{{.Name}}"{{if .Active}} aria-current="page"{{end}}>{{.Name}}</a>
-    <button type="button" class="rename-btn" data-rename="{{.Id}}" data-title="{{.Name}}" title="Rename" aria-label="Rename {{.Name}}">{{template "pencil"}}</button>
+    <button type="button" class="rename-btn" data-edit="/c/{{.Id}}/title" data-value="{{.Name}}" data-target="#conversations" data-swap="innerHTML" data-max="200" title="Rename" aria-label="Rename {{.Name}}">{{template "pencil"}}</button>
   </li>{{end}}
 </ul>{{else}}
 <p class="empty">No conversations yet.</p>{{end}}{{end}}
@@ -11,6 +31,7 @@
 {{define "message"}}{{if eq .Role "user"}}
 <article class="msg user">
   <div class="bubble">{{range .Images}}<img src="{{.}}" alt="Attached image">{{end}}{{if .Content}}<p>{{.Content}}</p>{{end}}</div>
+  {{template "stamp" .Time}}
 </article>{{else}}
 <article class="msg assistant" data-raw="{{.Content}}">
   <span class="avatar-dot" aria-hidden="true"></span>
@@ -20,6 +41,7 @@
       <button type="button" class="icon-btn small" data-copy title="Copy">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
       </button>
+      {{template "stamp" .Time}}
     </div>
   </div>
 </article>{{end}}{{end}}
@@ -44,11 +66,13 @@
 {{if .Cancelled}}<p class="note">Stopped.</p>{{end}}
 {{if .Err}}<p class="note error">{{.Err}}</p>{{end}}{{end}}
 
+{{define "stamp"}}{{if .ISO}}<time class="stamp" datetime="{{.ISO}}" title="{{.Full}}">{{.Short}}</time>{{end}}{{end}}
+
 {{define "pencil"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></svg>{{end}}
 
 {{define "heading"}}<div class="heading" id="chat-heading"{{if .Oob}} hx-swap-oob="true"{{end}}>
   <h1 id="chat-title"{{if .Title}} title="{{.Title}}"{{end}}>{{or .Title "New chat"}}</h1>
-  {{if .Id}}<button type="button" class="rename-btn" data-rename="{{.Id}}" data-title="{{.Title}}" title="Rename" aria-label="Rename this conversation">{{template "pencil"}}</button>{{end}}
+  {{if .Id}}<button type="button" class="rename-btn" data-edit="/c/{{.Id}}/title" data-value="{{.Title}}" data-target="#conversations" data-swap="innerHTML" data-max="200" title="Rename" aria-label="Rename this conversation">{{template "pencil"}}</button>{{end}}
 </div>{{end}}
 
 {{define "renamed"}}{{template "sidebar" .Sidebar}}

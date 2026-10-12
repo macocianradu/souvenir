@@ -9,19 +9,36 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/calendar"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 )
 
 const timeHelp = "YYYY-MM-DDTHH:MM in the user's timezone, or YYYY-MM-DD for an all-day event"
 
-func CalendarTools(base *calendar.Store) []Tool {
-	readable, writable := base.Readable(), base.Writable()
+func CalendarTools(base *calendar.Store) Provider {
+	return Provider{
+		Catalog: calendarTools(base),
+		Tools: func(ctx context.Context) []Tool {
+			store, err := userCalendars(ctx, base)
+			if err != nil || !store.Exists() {
+				return nil
+			}
+			if chosen := settings.FromContext(ctx); chosen.CustomCalendars {
+				store = store.WithAccess(chosen.CalendarRead, chosen.CalendarWrite)
+			}
+			return calendarTools(store)
+		},
+	}
+}
+
+func calendarTools(store *calendar.Store) []Tool {
+	readable, writable := store.Readable(), store.Writable()
 	if len(readable) == 0 {
 		return nil
 	}
 	readEnum, _ := json.Marshal(readable)
 	writeEnum, _ := json.Marshal(writable)
-	zone := base.Location().String()
+	zone := store.Location().String()
 
 	tools := []Tool{
 		{
@@ -38,10 +55,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				}
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Period    string   `json:"period"`
 					Date      string   `json:"date"`
@@ -87,10 +100,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				"required": ["query"]
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Query     string   `json:"query"`
 					From      string   `json:"from"`
@@ -103,6 +112,7 @@ func CalendarTools(base *calendar.Store) []Tool {
 				}
 				today := startOfDay(store.Now())
 				from, to := today, today.AddDate(2, 0, 1)
+				var err error
 				if args.From != "" {
 					if from, err = day(store, args.From); err != nil {
 						return "", err
@@ -144,10 +154,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, readEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -164,10 +170,10 @@ func CalendarTools(base *calendar.Store) []Tool {
 		},
 	}
 	if len(writable) == 0 {
-		return withCalendarDirectory(base, tools)
+		return tools
 	}
 
-	return withCalendarDirectory(base, append(tools,
+	return append(tools,
 		Tool{
 			Name: "calendar_create",
 			Description: "Add an event to one of the user's calendars. Without an end, a timed event lasts an " +
@@ -187,10 +193,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				"required": ["calendar", "summary", "start"]
 			}`, writeEnum, timeHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					changeArgs
@@ -226,10 +228,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, writeEnum, timeHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -258,10 +256,6 @@ func CalendarTools(base *calendar.Store) []Tool {
 				"required": ["calendar", "uid"]
 			}`, writeEnum)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-				store, err := userCalendars(ctx, base)
-				if err != nil {
-					return "", err
-				}
 				var args struct {
 					Calendar string `json:"calendar"`
 					Uid      string `json:"uid"`
@@ -275,17 +269,7 @@ func CalendarTools(base *calendar.Store) []Tool {
 				return "Deleted.", nil
 			},
 		},
-	))
-}
-
-func withCalendarDirectory(base *calendar.Store, ts []Tool) []Tool {
-	for i := range ts {
-		ts[i].Available = func(ctx context.Context) bool {
-			store, err := userCalendars(ctx, base)
-			return err == nil && store.Exists()
-		}
-	}
-	return ts
+	)
 }
 
 type changeArgs struct {

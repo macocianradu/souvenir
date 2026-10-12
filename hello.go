@@ -22,6 +22,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/tools"
@@ -83,12 +84,10 @@ func main() {
 	}
 	searcher := search.New(pool, store)
 	toolset := append([]tools.Tool{tools.SearchHistory(searcher)}, tools.MemoryTools(memories)...)
+	var calendars *calendar.Store
 	if config.Calendars.Enabled() {
-		calendars, err := calendar.New(config.Calendars)
-		if err != nil {
+		if calendars, err = calendar.New(config.Calendars); err != nil {
 			logger.Error("Calendars disabled", "error", err)
-		} else {
-			toolset = append(toolset, tools.CalendarTools(calendars)...)
 		}
 	}
 	if config.WebSearch.Url != "" {
@@ -101,6 +100,11 @@ func main() {
 	if config.Fetch.Enabled {
 		toolset = append(toolset, tools.WebFetch(web.NewFetcher(config.Fetch), config.Fetch.MaxChars))
 	}
+	registry := tools.NewRegistry(toolset...)
+	if calendars != nil {
+		registry.Provide(tools.CalendarTools(calendars))
+	}
+	userSettings := settings.NewStore(pool)
 	location := time.Local
 	if tz := config.Calendars.Timezone; tz != "" {
 		location, _ = time.LoadLocation(tz)
@@ -109,7 +113,7 @@ func main() {
 		cfg:      config,
 		history:  history.New(pool, config.Db),
 		searcher: searcher,
-		agent:    agent.New(tools.NewRegistry(toolset...), memories, location),
+		agent:    agent.New(registry, memories, location).WithSettings(userSettings),
 		memories: memories,
 	}
 
@@ -128,7 +132,7 @@ func main() {
 			}
 		})
 		if config.Web.Listen != "" {
-			site := webapp.New(config.Web, config.Oidc, accounts, sessions.NewStore(pool), webapp.App{Config: *config, History: a.history, Agent: a.agent})
+			site := webapp.New(config.Web, config.Oidc, accounts, sessions.NewStore(pool), webapp.App{Config: *config, History: a.history, Agent: a.agent, Settings: userSettings, Memories: memories, Tools: registry, Calendars: calendars})
 			wg.Go(func() {
 				if err := site.ListenAndServe(ctx); err != nil {
 					stop(fmt.Errorf("web server: %w", err))

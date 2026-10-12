@@ -52,8 +52,6 @@ const (
 	darkBackground  = "#23272f"
 )
 
-// manifest lets phones add the site to the home screen as an app of its
-// own. Android reads it; iOS takes the icon and title from the page's head.
 func manifest(w http.ResponseWriter, r *http.Request) {
 	type icon struct {
 		Src     string `json:"src"`
@@ -110,16 +108,49 @@ type messageView struct {
 	Content string
 	HTML    template.HTML
 	Images  []template.URL
+	Time    stamp
+}
+
+type stamp struct {
+	ISO   string
+	Short string
+	Full  string
+}
+
+func newStamp(at, now time.Time) stamp {
+	if at.IsZero() {
+		return stamp{}
+	}
+	loc := now.Location()
+	at = at.In(loc)
+	year, month, day := now.Date()
+	today := time.Date(year, month, day, 0, 0, 0, 0, loc)
+	clock := at.Format("15:04")
+	var short string
+	switch {
+	case !at.Before(today):
+		short = clock
+	case !at.Before(today.AddDate(0, 0, -1)):
+		short = "Yesterday " + clock
+	case !at.Before(today.AddDate(0, 0, -6)):
+		short = at.Format("Mon") + " " + clock
+	case at.Year() == now.Year():
+		short = at.Format("2 Jan") + " " + clock
+	default:
+		short = at.Format("2 Jan 2006") + " " + clock
+	}
+	return stamp{ISO: at.UTC().Format(time.RFC3339), Short: short, Full: at.Format("Monday 2 January 2006, 15:04")}
 }
 
 var imageTypes = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
 
-func messageViews(messages []model.Message) []messageView {
+func messageViews(messages []model.Message, loc *time.Location) []messageView {
+	now := time.Now().In(loc)
 	var views []messageView
 	for _, m := range messages {
 		switch m.Role {
 		case "user":
-			v := messageView{Role: m.Role, Content: m.Content}
+			v := messageView{Role: m.Role, Content: m.Content, Time: newStamp(m.CreatedAt, now)}
 			for _, img := range m.Images {
 				if slices.Contains(imageTypes, img.MediaType) {
 					v.Images = append(v.Images, template.URL(img.DataURL()))
@@ -130,7 +161,7 @@ func messageViews(messages []model.Message) []messageView {
 			if strings.TrimSpace(m.Content) == "" {
 				continue
 			}
-			views = append(views, messageView{Role: m.Role, Content: m.Content, HTML: renderMarkdown(m.Content)})
+			views = append(views, messageView{Role: m.Role, Content: m.Content, HTML: renderMarkdown(m.Content), Time: newStamp(m.CreatedAt, now)})
 		}
 	}
 	return views

@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/base64"
 	"encoding/json"
+	"time"
 )
 
 type Message struct {
@@ -13,6 +14,7 @@ type Message struct {
 	Images     []Image    `json:"-"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallId string     `json:"tool_call_id,omitempty"`
+	CreatedAt  time.Time  `json:"-"`
 }
 
 type Image struct {

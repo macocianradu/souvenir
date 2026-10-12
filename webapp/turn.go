@@ -165,10 +165,13 @@ func (s *Server) runTurn(ctx context.Context, t *turn, client llm.ChatClient, co
 		m.Seq = len(conv.Messages) + 1
 		conv.Messages = append(conv.Messages, m)
 	}
-	if _, err := s.app.History.SaveConversation(saveCtx, conv); err != nil {
+	if saved, err := s.app.History.SaveConversation(saveCtx, conv); err != nil {
 		s.logger.Error("Could not save the reply", "conversation", conv.Id, "error", err)
 		failed = true
 		t.update(func(st *turnState) { st.Err = "The reply could not be saved: " + err.Error() })
+	} else {
+		// The saved copies carry the time the reply was saved at.
+		reply = saved.Messages[len(saved.Messages)-len(reply):]
 	}
 	t.update(func(st *turnState) {
 		st.Reply = reply
@@ -235,7 +238,7 @@ type liveView struct {
 	Done        bool
 }
 
-func newLiveView(t *turn, st turnState) liveView {
+func (s *Server) liveView(t *turn, st turnState) liveView {
 	v := liveView{
 		TurnId:      t.id,
 		Memories:    st.Memories,
@@ -259,7 +262,7 @@ func newLiveView(t *turn, st turnState) liveView {
 		}
 	}
 	if st.Done {
-		v.Messages = messageViews(st.Reply)
+		v.Messages = messageViews(st.Reply, s.location)
 	} else if st.Content != "" {
 		v.HTML = renderMarkdown(st.Content)
 	}

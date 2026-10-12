@@ -4,22 +4,7 @@
 <body>
 <input type="checkbox" id="drawer" class="drawer-toggle" aria-label="Show conversations">
 <div class="app">
-  <aside class="sidebar">
-    <a class="brand" href="/" hx-boost="true"><span class="brand-dot" aria-hidden="true"></span>Souvenir</a>
-    <a class="new-chat" href="/" hx-boost="true">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat
-    </a>
-    <nav id="conversations" class="conversations" hx-boost="true" aria-label="Conversations">{{template "sidebar" .Sidebar}}</nav>
-    <div class="account">
-      <span class="avatar" aria-hidden="true">{{.Initials}}</span>
-      <span class="who">{{.User.Name}}</span>
-      <form method="post" action="/logout">
-        <button class="icon-btn small" type="submit" title="Sign out" aria-label="Sign out">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M16 17l5-5-5-5M21 12H9"/></svg>
-        </button>
-      </form>
-    </div>
-  </aside>
+  {{template "aside" .}}
   <label for="drawer" class="scrim" aria-hidden="true"></label>
 
   <main class="main">

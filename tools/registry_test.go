@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
@@ -70,5 +71,20 @@ func TestSpecs_DescribeEachToolAsAFunction(t *testing.T) {
 	var none *Registry
 	if none.Specs(context.Background()) != nil {
 		t.Fatal("a nil registry offers no tools")
+	}
+}
+
+func TestTools_TurnedOffByTheUserAreNeitherOfferedNorRun(t *testing.T) {
+	var seen json.RawMessage
+	r := echoRegistry(&seen)
+	off := settings.WithSettings(context.Background(), settings.Settings{DisabledTools: []string{"echo"}})
+	if len(r.Specs(off)) != 0 {
+		t.Fatal("a turned-off tool is offered")
+	}
+	if got := r.Call(off, call("echo", "{}")); !strings.Contains(got.Content, "unknown tool") || seen != nil {
+		t.Fatalf("a turned-off tool ran: %+v", got)
+	}
+	if len(r.Catalog()) != 1 {
+		t.Fatal("the catalog should still list it, for the settings page")
 	}
 }

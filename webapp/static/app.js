@@ -70,9 +70,52 @@ document.addEventListener("drop", (e) => {
   if (attach(e.dataTransfer.files)) e.preventDefault();
 });
 
-function setStatus(text) {
+// Message times are sent in the server's zone; these labels redo them in the
+// reader's own zone and language, with the server's rules: the time alone
+// today, then yesterday, the weekday within a week, and the date.
+const clock = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+const dayMonth = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
+const dayMonthYear = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
+const full = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
+const yesterday = (() => {
+  const word = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-1, "day");
+  return word.charAt(0).toUpperCase() + word.slice(1);
+})();
+
+function stampLabel(at, now) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAgo = (d) => new Date(today.getFullYear(), today.getMonth(), today.getDate() - d);
+  const time = clock.format(at);
+  if (at >= today) return time;
+  if (at >= daysAgo(1)) return yesterday + " " + time;
+  if (at >= daysAgo(6)) return weekday.format(at) + " " + time;
+  if (at.getFullYear() === now.getFullYear()) return dayMonth.format(at) + " " + time;
+  return dayMonthYear.format(at) + " " + time;
+}
+
+function localizeStamps(root) {
+  const now = new Date();
+  root.querySelectorAll?.("time.stamp[datetime]").forEach((el) => {
+    const at = new Date(el.getAttribute("datetime"));
+    if (isNaN(at)) return;
+    el.textContent = stampLabel(at, now);
+    el.title = full.format(at);
+  });
+}
+
+setInterval(() => localizeStamps(document), 60_000);
+
+let statusTimer;
+
+// setStatus shows a problem, or with ok a passing confirmation.
+function setStatus(text, ok) {
   const status = $("#status");
-  if (status) status.textContent = text || "";
+  if (!status) return;
+  clearTimeout(statusTimer);
+  status.textContent = text || "";
+  status.classList.toggle("ok", !!ok);
+  if (ok) statusTimer = setTimeout(() => setStatus(""), 1500);
 }
 
 function setBusy(turnId) {
@@ -115,6 +158,7 @@ function stream(turn) {
   const replace = (target, html) => {
     keepBottom(() => {
       target.innerHTML = html;
+      localizeStamps(target);
       const thinking = $(".thinking", target);
       if (thinking && turn.dataset.thinking) thinking.open = turn.dataset.thinking === "open";
       const thought = $(".thought", target);
@@ -138,7 +182,7 @@ function stream(turn) {
       title.title = e.data;
     }
     const rename = $("#chat-heading .rename-btn");
-    if (rename) rename.dataset.title = e.data;
+    if (rename) rename.dataset.value = e.data;
     document.title = e.data + " · Souvenir";
   });
   source.addEventListener("sidebar", (e) => {
@@ -155,6 +199,7 @@ function stream(turn) {
 }
 
 document.addEventListener("htmx:load", (e) => {
+  localizeStamps(e.detail.elt);
   e.detail.elt.querySelectorAll?.("[data-stream]").forEach(stream);
   if (e.detail.elt.matches?.("[data-stream]")) stream(e.detail.elt);
 });
@@ -223,24 +268,27 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// Renaming happens in place: the pencil turns the title into a field, Enter
-// or leaving the field saves, and Escape cancels.
-function startRename(button) {
-  const holder = button.closest("li, .heading");
+// Editing happens in place: the pencil turns a title or a memory into a
+// field, Enter or leaving the field saves, and Escape cancels. The button
+// says where to post (data-edit), the field's name (data-field) and what the
+// answer replaces (data-target, data-swap).
+function startEdit(button) {
+  const holder = button.closest("li, .heading, .memory");
   if (!holder || holder.classList.contains("editing")) return;
-  const before = (button.dataset.title || "").trim();
+  const before = (button.dataset.value || "").trim();
   const form = document.createElement("form");
   form.className = "rename-form";
-  form.setAttribute("hx-post", "/c/" + encodeURIComponent(button.dataset.rename) + "/title");
-  form.setAttribute("hx-target", "#conversations");
-  form.setAttribute("hx-swap", "innerHTML");
+  form.setAttribute("hx-post", button.dataset.edit);
+  form.setAttribute("hx-target", button.dataset.target);
+  form.setAttribute("hx-swap", button.dataset.swap || "innerHTML");
   const input = document.createElement("input");
-  input.name = "title";
+  input.name = button.dataset.field || "title";
   input.value = before;
-  input.maxLength = 200;
+  input.maxLength = Number(button.dataset.max) || 200;
   input.required = true;
   input.autocomplete = "off";
-  input.setAttribute("aria-label", "Title");
+  input.setAttribute("aria-label", button.getAttribute("aria-label") || "Edit");
+  // The open conversation, so a rename can update its heading too.
   const active = document.createElement("input");
   active.type = "hidden";
   active.name = "active";
@@ -260,8 +308,8 @@ function startRename(button) {
   };
   const save = () => {
     if (done) return;
-    const title = input.value.trim();
-    if (!title || title === before) return finish();
+    const value = input.value.trim();
+    if (!value || value === before) return finish();
     done = true;
     form.requestSubmit();
   };
@@ -275,16 +323,16 @@ function startRename(button) {
     }
   });
   input.addEventListener("blur", save);
-  // On success the new sidebar and heading replace the field.
+  // On success the answer replaces the field.
   form.addEventListener("htmx:afterRequest", (e) => {
     if (!e.detail.successful) finish();
   });
 }
 
 document.addEventListener("click", async (e) => {
-  const rename = e.target.closest("[data-rename]");
-  if (rename) {
-    startRename(rename);
+  const edit = e.target.closest("[data-edit]");
+  if (edit) {
+    startEdit(edit);
     return;
   }
 
@@ -323,3 +371,19 @@ document.addEventListener("click", async (e) => {
     if (drawer) drawer.checked = false;
   }
 });
+
+// Settings save as they change; the memory box empties once added.
+document.addEventListener("htmx:afterRequest", (e) => {
+  if (!e.detail.successful) return;
+  if (e.detail.elt.matches?.(".toggles")) setStatus("Saved.", true);
+  if (e.detail.elt.matches?.(".add-memory")) e.detail.elt.reset();
+});
+
+// Writing a calendar includes reading it.
+document.addEventListener("change", (e) => {
+  const box = e.target;
+  if (!box.matches?.(".calendars input")) return;
+  const row = box.closest("tr");
+  if (box.name === "write" && box.checked) $('input[name="read"]', row).checked = true;
+  if (box.name === "read" && !box.checked) $('input[name="write"]', row).checked = false;
+}, true);

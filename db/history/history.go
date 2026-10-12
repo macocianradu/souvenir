@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
@@ -52,7 +53,7 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	}
 	rows, err := cl.pool.Query(ctx,
 		`
-		  SELECT id, role, content, seq
+		  SELECT id, role, content, seq, created_at
 		    FROM messages
 		   WHERE conversation_id = $1
 		ORDER BY seq
@@ -64,7 +65,7 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	defer rows.Close()
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.Id, &msg.Role, &msg.Content, &msg.Seq); err != nil {
+		if err := rows.Scan(&msg.Id, &msg.Role, &msg.Content, &msg.Seq, &msg.CreatedAt); err != nil {
 			cl.logger.Error("Could not read message", "conversation_id", id, "error", err)
 			return conv, err
 		}
@@ -286,12 +287,13 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 		if message.Seq <= storedSeq {
 			continue
 		}
-		id, err := cl.saveMessage(ctx, tx, conv.Id, message)
+		id, createdAt, err := cl.saveMessage(ctx, tx, conv.Id, message)
 		if err != nil {
 			cl.logger.Error("Could not save message", "seq", message.Seq, "error", err)
 			return conv, fmt.Errorf("save message %d: %w", message.Seq, err)
 		}
 		conv.Messages[i].Id = id
+		conv.Messages[i].CreatedAt = createdAt
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -300,16 +302,17 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 	return conv, nil
 }
 
-func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId string, message model.Message) (string, error) {
+func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId string, message model.Message) (string, time.Time, error) {
 	var id string
+	var createdAt time.Time
 	if err := tx.QueryRow(ctx,
 		`
 		INSERT INTO messages (seq, role, content, conversation_id)
 		     VALUES ($1, $2, $3, $4)
-		  RETURNING id
+		  RETURNING id, created_at
 		`,
-		message.Seq, message.Role, message.Content, conversationId).Scan(&id); err != nil {
-		return "", err
+		message.Seq, message.Role, message.Content, conversationId).Scan(&id, &createdAt); err != nil {
+		return "", time.Time{}, err
 	}
 
 	for i, img := range message.Images {
@@ -318,16 +321,16 @@ func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId st
 			INSERT INTO message_images (message_id, position, media_type, data)
 			     VALUES ($1, $2, $3, $4)
 			`, id, i, img.MediaType, img.Data); err != nil {
-			return "", fmt.Errorf("insert image: %w", err)
+			return "", time.Time{}, fmt.Errorf("insert image: %w", err)
 		}
 	}
 
 	if message.Role != "user" && message.Role != "assistant" {
-		return id, nil
+		return id, createdAt, nil
 	}
 	chunks := Chunk(message.Content, cl.cfg.ChunkSize, cl.cfg.ChunkOverlap)
 	if len(chunks) == 0 {
-		return id, nil
+		return id, createdAt, nil
 	}
 	batch := &pgx.Batch{}
 	for _, chunk := range chunks {
@@ -341,9 +344,9 @@ func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId st
 			conversationId, id, chunk, hex.EncodeToString(hash[:]))
 	}
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
-		return "", fmt.Errorf("insert chunks: %w", err)
+		return "", time.Time{}, fmt.Errorf("insert chunks: %w", err)
 	}
-	return id, nil
+	return id, createdAt, nil
 }
 
 func Chunk(text string, size int, overlap int) []string {

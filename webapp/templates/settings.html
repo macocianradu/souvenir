@@ -1,0 +1,101 @@
+{{define "settings"}}<!doctype html>
+<html lang="en">
+{{template "head" "Settings"}}
+<body>
+<input type="checkbox" id="drawer" class="drawer-toggle" aria-label="Show settings sections">
+<div class="app">
+  <aside class="sidebar settings-nav">
+    <div class="settings-title">
+      <a class="icon-btn" href="/" hx-boost="true" title="Back to chat" aria-label="Back to chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+      </a>
+      <h1>Settings</h1>
+    </div>
+    <nav class="tabs" hx-boost="true" aria-label="Settings sections">
+      {{range .Tabs}}<a href="/settings/{{.Id}}"{{if eq .Id $.Tab}} class="active" aria-current="page"{{end}}>{{.Label}}</a>
+      {{end}}
+    </nav>
+  </aside>
+  <label for="drawer" class="scrim" aria-hidden="true"></label>
+
+  <main class="main">
+    <header class="topbar">
+      <label for="drawer" class="icon-btn menu" title="Settings sections">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 16h14"/></svg>
+      </label>
+      <div class="heading settings-heading"><h1>{{.Title}}</h1></div>
+    </header>
+    <div class="messages">
+      <div class="settings">
+        {{if eq .Tab "memories"}}{{template "memories-tab" .}}
+        {{else if eq .Tab "tools"}}{{template "tools-tab" .}}
+        {{else}}{{template "calendars-tab" .}}{{end}}
+        <p id="status" class="status" role="status"></p>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>{{end}}
+
+{{define "memories-tab"}}
+<p class="lead">Things your assistant remembers about you across chats. It also saves and updates them itself as you talk.</p>
+<form class="add-memory" hx-post="/settings/memories" hx-target="#memories" hx-swap="outerHTML">
+  <input name="content" placeholder="Add a memory…" aria-label="New memory" maxlength="1000" autocomplete="off" required>
+  <button class="button primary" type="submit">Add</button>
+</form>
+{{template "memories" .Memories}}
+{{end}}
+
+{{define "memories"}}<section id="memories" class="memories" aria-label="Memories">
+  <p class="count">{{len .Memories}} saved</p>
+  {{range .Memories}}
+  <div class="memory">
+    <p class="memory-text">{{.Content}}</p>
+    {{template "stamp" .Time}}
+    <button type="button" class="rename-btn" data-edit="/settings/memories/{{.Id}}" data-field="content" data-value="{{.Content}}" data-target="#memories" data-swap="outerHTML" data-max="1000" title="Edit" aria-label="Edit this memory">{{template "pencil"}}</button>
+    <button type="button" class="rename-btn forget" hx-post="/settings/memories/{{.Id}}/forget" hx-target="#memories" hx-swap="outerHTML" hx-confirm="Forget “{{.Content}}”?" title="Forget" aria-label="Forget this memory">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  {{else}}
+  <p class="empty">Nothing remembered yet.</p>
+  {{end}}
+</section>{{end}}
+
+{{define "tools-tab"}}
+<p class="lead">What your assistant may use while answering. A tool turned off is not offered to it at all. Changes save as you make them.</p>
+<form class="toggles" hx-post="/settings/tools" hx-trigger="change" hx-swap="none">
+  {{range .Tools}}
+  <label class="toggle">
+    <span class="toggle-text"><strong>{{.Label}}</strong><small>{{.Summary}}</small></span>
+    <input type="checkbox" name="tool" value="{{.Name}}"{{if .Enabled}} checked{{end}}>
+    <span class="switch" aria-hidden="true"></span>
+  </label>
+  {{end}}
+</form>
+{{end}}
+
+{{define "calendars-tab"}}
+{{if not .CalendarsEnabled}}
+<p class="lead">Calendars are not set up on this server.</p>
+{{else if not .Calendars}}
+<p class="lead">No calendars are set up for you yet, so your assistant has no calendar tools. They are the folders in your own calendar directory on the server.</p>
+{{else}}
+<p class="lead">The calendars in your calendar directory: which your assistant reads, and which it may add to and change. Writing includes reading. Changes save as you make them.{{if not .CustomCalendars}} The ticks are the defaults until you change one.{{end}}</p>
+<form class="toggles" hx-post="/settings/calendars" hx-trigger="change" hx-swap="none">
+  <table class="calendars">
+    <thead><tr><th scope="col">Calendar</th><th scope="col">Read</th><th scope="col">Write</th></tr></thead>
+    <tbody>
+      {{range .Calendars}}
+      <tr>
+        <th scope="row">{{.Name}}</th>
+        <td><input type="checkbox" name="read" value="{{.Name}}" aria-label="Read {{.Name}}"{{if .Read}} checked{{end}}></td>
+        <td><input type="checkbox" name="write" value="{{.Name}}" aria-label="Write {{.Name}}"{{if .Write}} checked{{end}}></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</form>
+{{end}}
+{{end}}

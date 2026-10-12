@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -80,7 +81,32 @@ func (s *Store) For(user string) (*Store, error) {
 	return &c, nil
 }
 
-// Exists says whether the store's directory is there.
+func (s *Store) WithAccess(read, write []string) *Store {
+	c := *s
+	c.readable = append(slices.Clone(read), write...)
+	slices.Sort(c.readable)
+	c.readable = slices.Compact(c.readable)
+	c.writable = slices.Clone(write)
+	return &c
+}
+
+func (s *Store) Calendars() ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
 func (s *Store) Exists() bool {
 	info, err := os.Stat(s.root)
 	return err == nil && info.IsDir()

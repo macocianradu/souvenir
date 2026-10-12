@@ -487,3 +487,44 @@ func TestRename_SetsTheUsersTitleInPlace(t *testing.T) {
 	}
 	h.post(dana, "/turns/"+id+"/cancel", nil)
 }
+
+func TestStamp_ShortensWithRecency(t *testing.T) {
+	loc := time.FixedZone("Brussels", 2*3600)
+	now := time.Date(2026, 10, 14, 9, 30, 0, 0, loc) // a Wednesday
+	for at, want := range map[time.Time]string{
+		time.Date(2026, 10, 14, 0, 5, 0, 0, loc):   "00:05",
+		time.Date(2026, 10, 13, 23, 59, 0, 0, loc): "Yesterday 23:59",
+		time.Date(2026, 10, 8, 14, 0, 0, 0, loc):   "Thu 14:00",
+		time.Date(2026, 10, 7, 14, 0, 0, 0, loc):   "7 Oct 14:00",
+		time.Date(2025, 12, 31, 18, 0, 0, 0, loc):  "31 Dec 2025 18:00",
+		// Saved in UTC, shown in the server's zone.
+		time.Date(2026, 10, 13, 22, 30, 0, 0, time.UTC): "00:30",
+	} {
+		s := newStamp(at, now)
+		if s.Short != want || s.ISO != at.UTC().Format(time.RFC3339) {
+			t.Errorf("%s: %+v, want %q", at, s, want)
+		}
+	}
+	if newStamp(time.Time{}, now) != (stamp{}) {
+		t.Error("an unsaved message has a time")
+	}
+}
+
+func TestChat_MessagesShowWhenTheyWereSent(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	w := h.post(dana, "/messages", url.Values{"content": {"hi"}})
+	stamped := regexp.MustCompile(`<time class="stamp" datetime="[0-9T:\-]+Z" title="[^"]+">[0-9]{2}:[0-9]{2}</time>`)
+	if !stamped.MatchString(w.Body.String()) {
+		t.Fatalf("the sent message has no time:\n%s", w.Body)
+	}
+	events := h.get(dana, "/turns/"+turnId(t, w.Body.String())+"/events").Body.String()
+	done := events[strings.Index(events, "event: done"):]
+	if !stamped.MatchString(done) {
+		t.Fatalf("the reply has no time:\n%s", done)
+	}
+	page := h.get(dana, w.Header().Get("HX-Push-Url")).Body.String()
+	if n := len(stamped.FindAllString(page, -1)); n != 2 {
+		t.Fatalf("the reopened conversation shows %d times, want 2", n)
+	}
+}

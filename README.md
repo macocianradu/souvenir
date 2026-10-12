@@ -266,6 +266,8 @@ a user name that is not a plain directory name is refused. A user without a
 directory is not offered the calendar tools at all. `Read` and
 `Write` name the calendars within each user's directory, the same for everyone.
 Renaming a user (`souvenir users rename`) means renaming their directory too.
+These lists are the defaults; each user can pick their own on the web settings
+page (see Settings).
 Environment variables in `Path` are expanded (`~` is not), and it must exist at
 startup or the calendar tools are disabled. The app never speaks CalDAV; it reads and writes those
 files and leaves syncing to `vdirsyncer`. Only calendars named in `Read` or
@@ -330,6 +332,10 @@ conversation at a time. When it is finished the conversation is named and, past
 its budget, summarized, as in the TUI. The model picker lists the provider's
 models and remembers the choice.
 
+Every message shows when it was sent: the time alone today, then "Yesterday",
+the weekday within a week, and the date, with the full date on hover. The page
+shows them in the reader's own time zone and language.
+
 Long titles end in an ellipsis, with the full title as a tooltip. The pencil
 next to a conversation in the sidebar, or next to the open one's title, renames
 it in place: Enter or leaving the field saves, Escape cancels. A title you set
@@ -343,6 +349,27 @@ Pasting a clipboard that also holds text, such as a copy from a document,
 pastes the text instead. The server decides each image's type from its bytes
 and accepts only PNG, JPEG, WebP and GIF. Images are saved with the message, as
 in the TUI, and need a chat model that reads them.
+
+### Settings
+
+Each user has settings of their own, kept in `user_settings` and edited on the
+web at `/settings` (the gear next to your name), in three tabs. They apply from
+the next message, in the TUI as well, since the agent reads them at the start of
+every turn. Tools and calendars save as you change them.
+
+- **Memories**: what the assistant remembers about you, which you can add to,
+  edit in place and forget, as the assistant itself does with its memory tools.
+- **Tools**: any tool can be turned off. A tool turned off is not offered to the
+  model at all, and a call to it is refused. Memory recall at the start of a
+  turn is not a tool and keeps working.
+- **Calendars**: every calendar folder in your own calendar directory is listed,
+  whatever the configuration names, with whether the assistant reads it and
+  whether it writes to it; writing includes reading. Until you change one, the
+  configured `Read` and `Write` lists decide the ticks. Choosing none leaves you
+  without calendar tools.
+
+Only tools and calendar folders that exist are kept when saving, so a crafted
+form cannot name others.
 
 ### Web sign-in
 
