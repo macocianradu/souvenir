@@ -238,3 +238,36 @@ func TestEmbedder_MissingVectorIsAnError(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestStream_ReadsMistralContentChunks(t *testing.T) {
+	cl := newClient(t, sse(
+		`{"choices":[{"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"let me "}]}]}}]}`,
+		`{"choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"think"}]}]}}]}`,
+		`{"choices":[{"delta":{"content":[{"type":"text","text":"Hel"},{"type":"reference","reference_ids":[1]}]}}]}`,
+		`{"choices":[{"delta":{"content":"lo"}}]}`,
+		`{"choices":[{"delta":{"content":null},"finish_reason":"stop"}]}`,
+		`[DONE]`))
+	ch, err := cl.QueryStream(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collect(t, ch)
+	if got.last.Err != nil || got.content != "Hello" || got.reasoning != "let me think" {
+		t.Fatalf("%+v", got)
+	}
+	if got.last.Messages[0].Content != "Hello" {
+		t.Fatalf("final message %+v", got.last.Messages[0])
+	}
+}
+
+func TestCall_ReadsMistralContentChunks(t *testing.T) {
+	cl := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":[
+			{"type":"thinking","thinking":[{"type":"text","text":"hmm"}]},
+			{"type":"text","text":" new summary "}]}}]}`)
+	}))
+	got, err := cl.Summarize(context.Background(), "", []model.Message{{Role: "user", Content: "hi"}})
+	if err != nil || got != "new summary" {
+		t.Fatal(got, err)
+	}
+}

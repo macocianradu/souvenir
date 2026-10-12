@@ -57,9 +57,13 @@ type RenameResponse struct {
 }
 
 type Choice struct {
-	Index        int           `json:"index"`
-	Message      model.Message `json:"message"`
-	FinishReason string        `json:"finish_reason"`
+	Index   int `json:"index"`
+	Message struct {
+		Role      string           `json:"role"`
+		Content   Content          `json:"content"`
+		ToolCalls []model.ToolCall `json:"tool_calls"`
+	} `json:"message"`
+	FinishReason string `json:"finish_reason"`
 }
 
 type Usage struct {
@@ -222,7 +226,8 @@ func (cl ChatClient) Call(ctx context.Context, requestBody ChatRequest) ([]model
 	}
 	var result []model.Message
 	for _, choice := range response.Choices {
-		result = append(result, choice.Message)
+		m := choice.Message
+		result = append(result, model.Message{Role: m.Role, Content: m.Content.Text, ToolCalls: m.ToolCalls})
 	}
 	return result, nil
 }

@@ -166,10 +166,10 @@ func CalendarTools(store *calendar.Store) []Tool {
 					"calendar": {"type": "string", "enum": %s},
 					"summary": {"type": "string", "description": "The event title"},
 					"start": {"type": "string", "description": %q},
-					"end": {"type": "string", "description": "Same format as start. For all-day events, the last day"},
+					"end": {"type": "string", "description": "Same format as start: when the event, or the first occurrence of a repeating one, ends. For all-day events, its last day. Never the end of a repeating series; that goes in recurrence"},
 					"location": {"type": "string"},
 					"description": {"type": "string"},
-					"recurrence": {"type": "string", "description": "An iCalendar RRULE for repeating events, such as FREQ=WEEKLY;BYDAY=MO. End it with UNTIL=20261218T235959Z or after a number of occurrences with COUNT=10"},
+					"recurrence": {"type": "string", "description": "An iCalendar RRULE for repeating events, such as FREQ=WEEKLY;BYDAY=MO. End the series on a date with UNTIL=20261218T235959Z or after a number of occurrences with COUNT=10. Start and end describe the first occurrence"},
 					"exceptions": {"type": "array", "items": {"type": "string"}, "description": "Dates (YYYY-MM-DD) of occurrences a repeating event skips, such as holidays"}
 				},
 				"required": ["calendar", "summary", "start"]
@@ -201,7 +201,7 @@ func CalendarTools(store *calendar.Store) []Tool {
 					"uid": {"type": "string", "description": "The event uid, from calendar_list or calendar_search"},
 					"summary": {"type": "string"},
 					"start": {"type": "string", "description": %q},
-					"end": {"type": "string", "description": "Same format as start. For all-day events, the last day"},
+					"end": {"type": "string", "description": "Same format as start: when the event, or the first occurrence of a repeating one, ends. For all-day events, its last day. Never the end of a repeating series; that goes in recurrence"},
 					"location": {"type": "string"},
 					"description": {"type": "string"},
 					"recurrence": {"type": "string", "description": "An iCalendar RRULE, or an empty string to stop repeating"},

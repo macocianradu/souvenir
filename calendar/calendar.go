@@ -409,6 +409,9 @@ func (s *Store) apply(comp *ical.Component, c Changes) error {
 			return err
 		}
 	}
+	if err := s.checkOccurrencesFit(comp); err != nil {
+		return err
+	}
 	now := s.now().UTC()
 	seq, _ := strconv.Atoi(propValue(comp, ical.PropSequence))
 	if comp.Props.Get(ical.PropSequence) != nil {
@@ -417,6 +420,32 @@ func (s *Store) apply(comp *ical.Component, c Changes) error {
 	comp.Props.Set(&ical.Prop{Name: ical.PropSequence, Params: ical.Params{}, Value: strconv.Itoa(seq)})
 	comp.Props.SetDateTime(ical.PropDateTimeStamp, now)
 	comp.Props.SetDateTime(ical.PropLastModified, now)
+	return nil
+}
+
+func (s *Store) checkOccurrencesFit(comp *ical.Component) error {
+	option, err := comp.Props.RecurrenceRule()
+	if err != nil || option == nil || comp.Props.Get(ical.PropDateTimeStart) == nil {
+		return err
+	}
+	ev, err := s.toEvent("", comp)
+	if err != nil {
+		return err
+	}
+	option.Dtstart = ev.Start
+	rule, err := rrule.NewRRule(*option)
+	if err != nil {
+		return err
+	}
+	starts := rule.Between(ev.Start, ev.Start.AddDate(2, 0, 0), true)
+	length := ev.End.Sub(ev.Start)
+	for i := 1; i < len(starts) && i <= 10; i++ {
+		if gap := starts[i].Sub(starts[i-1]); length > gap {
+			return fmt.Errorf("each occurrence would last until %s, past the next one on %s: end is the end of "+
+				"the first occurrence, not of the series. To end the series, put UNTIL or COUNT in recurrence",
+				ev.End.Format("2006-01-02 15:04"), starts[i].Format("2006-01-02 15:04"))
+		}
+	}
 	return nil
 }
 

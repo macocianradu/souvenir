@@ -354,3 +354,25 @@ func TestBetween_ReadsCommaSeparatedExceptions(t *testing.T) {
 		t.Fatal(summaries(got))
 	}
 }
+
+func TestWrite_RefusesOccurrencesLongerThanTheirRepeat(t *testing.T) {
+	s := newStore(t, nil)
+	summary, start, end, rule := "French class", "2026-09-22", "2027-06-30", "FREQ=WEEKLY;UNTIL=20270131T235959Z;BYDAY=TU,TH"
+	_, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, End: &end, Recurrence: &rule})
+	if err == nil || !strings.Contains(err.Error(), "not of the series") {
+		t.Fatalf("got %v", err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(s.root, "assistant", "*.ics")); len(files) != 0 {
+		t.Fatal("the event was written anyway")
+	}
+
+	start, end = "2026-09-22T18:10", "2026-09-22T21:10"
+	ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, End: &end, Recurrence: &rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := "2026-09-25T21:10"
+	if _, err := s.Update("assistant", ev.Uid, Changes{End: &long}); err == nil {
+		t.Fatal("stretching an occurrence past the next one was accepted")
+	}
+}

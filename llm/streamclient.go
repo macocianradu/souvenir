@@ -33,7 +33,7 @@ type StreamChoice struct {
 
 type StreamDelta struct {
 	Role             string          `json:"role,omitempty"`
-	Content          string          `json:"content,omitempty"`
+	Content          Content         `json:"content"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
 	Reasoning        string          `json:"reasoning,omitempty"`
 	ToolCalls        []ToolCallDelta `json:"tool_calls,omitempty"`
@@ -126,14 +126,14 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 		}
 
 		delta := chunk.Choices[0].Delta
-		if reasoning := delta.ReasoningContent + delta.Reasoning; reasoning != "" {
+		if reasoning := delta.ReasoningContent + delta.Reasoning + delta.Content.Thinking; reasoning != "" {
 			if !send(StreamEvent{Reasoning: reasoning}) {
 				return
 			}
 		}
-		if delta.Content != "" {
-			content.WriteString(delta.Content)
-			if !send(StreamEvent{Content: delta.Content}) {
+		if delta.Content.Text != "" {
+			content.WriteString(delta.Content.Text)
+			if !send(StreamEvent{Content: delta.Content.Text}) {
 				return
 			}
 		}
