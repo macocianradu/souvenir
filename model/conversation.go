@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 const (
 	TitleSourceUser = "user"
 	TitleSourceLLM  = "llm"
@@ -11,6 +13,7 @@ type Conversation struct {
 	TitleSource    string
 	Summary        string
 	Preview        string
+	UpdatedAt      time.Time
 	Messages       []Message
 	ContextSummary *ContextSummary
 }

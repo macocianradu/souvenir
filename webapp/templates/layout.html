@@ -1,0 +1,29 @@
+{{define "head"}}<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
+<title>{{if .}}{{.}} · {{end}}Souvenir</title>
+<link rel="icon" type="image/svg+xml" href="{{static "icon.svg"}}">
+<link rel="stylesheet" href="{{static "app.css"}}">
+<script src="{{static "htmx.min.js"}}" defer></script>
+<script src="{{static "app.js"}}" defer></script>
+</head>{{end}}
+
+{{define "page"}}<!doctype html>
+<html lang="en">
+{{template "head" ""}}
+<body class="plain">
+<main class="card">
+  <a class="brand" href="/"><span class="brand-dot" aria-hidden="true"></span>Souvenir</a>
+  {{if .Message}}
+  <p>{{.Message}}</p>
+  {{if .Retry}}<a class="button" href="/login">Sign in again</a>{{end}}
+  {{if .Home}}<a class="button" href="/">Back to your chats</a>{{end}}
+  {{else}}
+  <p class="muted">Your assistant, with a memory.</p>
+  <a class="button primary" href="/login">Sign in</a>
+  {{end}}
+</main>
+</body>
+</html>{{end}}

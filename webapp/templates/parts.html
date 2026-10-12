@@ -1,0 +1,48 @@
+{{define "sidebar"}}{{range .Groups}}
+<h2>{{.Label}}</h2>
+<ul>{{range .Items}}
+  <li><a href="/c/{{.Id}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}
+</ul>{{else}}
+<p class="empty">No conversations yet.</p>{{end}}{{end}}
+
+{{define "message"}}{{if eq .Role "user"}}
+<article class="msg user">
+  <div class="bubble">{{range .Images}}<img src="{{.}}" alt="Attached image">{{end}}{{if .Content}}<p>{{.Content}}</p>{{end}}</div>
+</article>{{else}}
+<article class="msg assistant" data-raw="{{.Content}}">
+  <span class="avatar-dot" aria-hidden="true"></span>
+  <div class="body">
+    <div class="md">{{.HTML}}</div>
+    <div class="actions">
+      <button type="button" class="icon-btn small" data-copy title="Copy">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+      </button>
+    </div>
+  </div>
+</article>{{end}}{{end}}
+
+{{define "live"}}<div class="turn" id="turn-{{.TurnId}}" data-turn="{{.TurnId}}"{{if not .Done}} data-stream="/turns/{{.TurnId}}/events"{{end}}>{{template "live-body" .}}</div>{{end}}
+
+{{define "live-body"}}{{if or .Memories .Thinking .Trail}}
+<div class="activity">
+  {{if .Memories}}<ul class="recalled" title="Remembered from earlier conversations">{{range .Memories}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .Thinking}}<details class="thinking"{{if .Thinks}} open{{end}}>
+    <summary>{{if .Thinks}}<span class="pulse" aria-hidden="true"></span>Thinking{{else}}Thought for {{.ThinkingFor}}s{{end}}</summary>
+    <div class="thought">{{.Thinking}}</div>
+  </details>{{end}}
+  {{if .Trail}}<ul class="trail">{{range .Trail}}<li class="{{.Kind}}">{{.Text}}</li>{{end}}</ul>{{end}}
+</div>{{end}}
+{{if .Done}}{{range .Messages}}{{template "message" .}}{{end}}
+{{else if .HTML}}<article class="msg assistant streaming">
+  <span class="avatar-dot" aria-hidden="true"></span>
+  <div class="body"><div class="md">{{.HTML}}</div></div>
+</article>
+{{else if not .Thinking}}<div class="pending" aria-label="Writing a reply"><span></span><span></span><span></span></div>{{end}}
+{{if .Cancelled}}<p class="note">Stopped.</p>{{end}}
+{{if .Err}}<p class="note error">{{.Err}}</p>{{end}}{{end}}
+
+{{define "sent"}}{{template "message" .User}}
+{{template "live" .Live}}
+{{if .NewId}}<div id="landing" hx-swap-oob="delete"></div>
+<input type="hidden" name="conversation" id="conversation-id" value="{{.NewId}}" hx-swap-oob="true">{{end}}
+<nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>{{end}}

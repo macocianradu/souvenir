@@ -128,7 +128,7 @@ func main() {
 			}
 		})
 		if config.Web.Listen != "" {
-			site := webapp.New(config.Web, config.Oidc, accounts, sessions.NewStore(pool))
+			site := webapp.New(config.Web, config.Oidc, accounts, sessions.NewStore(pool), webapp.App{Config: *config, History: a.history, Agent: a.agent})
 			wg.Go(func() {
 				if err := site.ListenAndServe(ctx); err != nil {
 					stop(fmt.Errorf("web server: %w", err))

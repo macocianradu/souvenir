@@ -1,0 +1,76 @@
+{{define "chat"}}<!doctype html>
+<html lang="en">
+{{template "head" .Conversation.Title}}
+<body>
+<input type="checkbox" id="drawer" class="drawer-toggle" aria-label="Show conversations">
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="/" hx-boost="true"><span class="brand-dot" aria-hidden="true"></span>Souvenir</a>
+    <a class="new-chat" href="/" hx-boost="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat
+    </a>
+    <nav id="conversations" class="conversations" hx-boost="true" aria-label="Conversations">{{template "sidebar" .Sidebar}}</nav>
+    <div class="account">
+      <span class="avatar" aria-hidden="true">{{.Initials}}</span>
+      <span class="who">{{.User.Name}}</span>
+      <form method="post" action="/logout">
+        <button class="icon-btn small" type="submit" title="Sign out" aria-label="Sign out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M16 17l5-5-5-5M21 12H9"/></svg>
+        </button>
+      </form>
+    </div>
+  </aside>
+  <label for="drawer" class="scrim" aria-hidden="true"></label>
+
+  <main class="main">
+    <header class="topbar">
+      <label for="drawer" class="icon-btn menu" title="Conversations">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 16h14"/></svg>
+      </label>
+      <h1 id="chat-title">{{or .Conversation.Title "New chat"}}</h1>
+      <label class="model">
+        <span class="status-dot" aria-hidden="true"></span>
+        <select name="model" form="composer" aria-label="Model">
+          {{range .Models}}<option{{if eq . $.Model}} selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <a class="icon-btn new-mobile" href="/" hx-boost="true" title="New chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </a>
+    </header>
+
+    <section id="messages" class="messages">
+      <div class="thread">
+        {{if and (not .Messages) (not .Live)}}
+        <div id="landing" class="landing">
+          <span class="brand-dot big" aria-hidden="true"></span>
+          <h2>What's on your mind?</h2>
+        </div>
+        {{end}}
+        <div id="thread">
+          {{range .Messages}}{{template "message" .}}{{end}}
+          {{with .Live}}{{template "live" .}}{{end}}
+        </div>
+      </div>
+    </section>
+
+    <div class="composer-wrap">
+      <p id="status" class="status" role="status"></p>
+      <form id="composer" class="composer" hx-post="/messages" hx-target="#thread" hx-swap="beforeend">
+        <input type="hidden" name="conversation" id="conversation-id" value="{{.Conversation.Id}}">
+        <textarea name="content" rows="1" placeholder="Ask anything…" aria-label="Message" required maxlength="100000"></textarea>
+        {{if .CanThink}}
+        <label class="think"><input type="checkbox" name="think"{{if .Think}} checked{{end}}><span>Think</span></label>
+        {{end}}
+        <button type="submit" class="send" title="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+        <button type="button" class="stop" title="Stop" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+        </button>
+      </form>
+    </div>
+  </main>
+</div>
+</body>
+</html>{{end}}

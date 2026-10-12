@@ -187,14 +187,12 @@ Not yet covered by the calendar tools: to-dos
 (`VTODO`), changing a single occurrence of a recurring event (skipping one is
 covered by exceptions), and moving an event between calendars.
 
-### Other frontends
+### On the web
 
-The TUI is served over SSH (`souvenir serve`), and the web sign-in exists (see
-Web sign-in below). Still to come: the chat itself on the web, sharing the same
-core (the `agent` package). Both reachable from outside the
-home network behind a reverse proxy, with the origin locked to the proxy and
-client addresses trusted from a header only when the request actually came
-through it.
+Not on the web yet, though the TUI has them: pasting images, renaming and
+deleting conversations, searching history, and reviewing memories. Also still
+to come: regenerating a reply, and trusting the client address from the proxy's
+header only when the request came through it.
 
 ### Logins
 
@@ -311,11 +309,28 @@ migrate or destroy anything, it just starts filling a new table, because a
 another and back does not re-embed anything. While a new table is still filling,
 keyword search keeps working, so search gets worse rather than breaking.
 
+### Web frontend
+
+The chat on the web shares the TUI's core (the `agent` package) and its data: a
+conversation started in one shows up in the other. Pages are rendered on the
+server and htmx swaps them in; a small `app.js` handles the reply stream, Enter
+to send, copy and stop. Everything, htmx included, is embedded in the binary and
+served from it, so the pages run under a Content-Security-Policy allowing only
+the server's own scripts and styles.
+
+Sending saves the message and starts the reply on the server, detached from the
+request, then streams it to the page as server-sent events: the thinking, the
+memories recalled and tool calls made, and the answer rendered from markdown
+(raw HTML in it is dropped). Closing the page does not stop the reply, and
+opening the conversation again picks the stream back up. One reply runs per
+conversation at a time. When it is finished the conversation is named and, past
+its budget, summarized, as in the TUI. The model picker lists the provider's
+models and remembers the choice.
+
 ### Web sign-in
 
-Setting `Web.Listen` makes `souvenir serve` also serve HTTP, where people sign
-in with an OpenID Connect provider such as Authentik. For now the page only says
-who is signed in; the chat comes later.
+Setting `Web.Listen` makes `souvenir serve` also serve the web frontend, where
+people sign in with an OpenID Connect provider such as Authentik.
 
 ```json
 "Web":  { "Listen": ":8080", "BaseUrl": "https://llm.example.com", "SessionDays": 30 },

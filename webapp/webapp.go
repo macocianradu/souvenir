@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
+	"git.estatecloud.org/radumaco/souvenir/llm"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
@@ -37,11 +37,30 @@ type Server struct {
 	mu       sync.Mutex
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+
+	app       App
+	llm       llm.ChatClient
+	turns     *turns
+	modelList models
+	location  *time.Location
+	// base outlives requests: turns run on it.
+	base context.Context
 }
 
-func New(cfg config.WebConfig, oc config.OidcConfig, accounts *users.Store, store *sessions.Store) *Server {
+func New(cfg config.WebConfig, oc config.OidcConfig, accounts *users.Store, store *sessions.Store, app App) *Server {
 	base, _ := url.Parse(cfg.BaseUrl)
+	location := time.Local
+	if tz := app.Config.Calendars.Timezone; tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			location = loc
+		}
+	}
 	return &Server{
+		app:      app,
+		llm:      *llm.NewLLMClient(app.Config),
+		turns:    newTurns(),
+		location: location,
+		base:     context.Background(),
 		logger:   *slog.Default().With("Component", "Web"),
 		cfg:      cfg,
 		oidc:     oc,
@@ -59,10 +78,26 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.login)
 	mux.HandleFunc("GET "+callbackPath, s.callback)
 	mux.HandleFunc("POST /logout", s.logout)
-	return securityHeaders(mux)
+	mux.Handle("GET /static/", staticHandler())
+	mux.Handle("GET /c/{id}", s.RequireUser(http.HandlerFunc(s.conversation)))
+	mux.Handle("POST /messages", s.RequireUser(http.HandlerFunc(s.send)))
+	mux.Handle("GET /turns/{id}/events", s.RequireUser(http.HandlerFunc(s.events)))
+	mux.Handle("POST /turns/{id}/cancel", s.RequireUser(http.HandlerFunc(s.cancel)))
+	return securityHeaders(s.sameOriginPosts(mux))
+}
+
+func (s *Server) sameOriginPosts(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.sameOrigin(r) {
+			http.Error(w, "Cross-site request refused", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	s.base = ctx
 	srv := &http.Server{
 		Addr:              s.cfg.Listen,
 		Handler:           s.Handler(),
@@ -102,7 +137,7 @@ func (s *Server) RequireUser(next http.Handler) http.Handler {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
@@ -179,7 +214,11 @@ func (s *Server) provider(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVer
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.currentUser(r)
-	s.page(w, http.StatusOK, page{User: u, SignedIn: ok})
+	if !ok {
+		s.page(w, http.StatusOK, page{})
+		return
+	}
+	s.newChat(w, r.WithContext(users.WithUser(r.Context(), u)))
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -277,12 +316,6 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// resolve finds the user a provider login belongs to, creating one for a new
-// login. Who may sign in at all is decided at the provider. A login seen
-// before is known by its issuer and subject. An unknown one is matched once on
-// the configured claim: an existing user of that name who has no login from
-// this provider yet is linked to it, and otherwise a user of that name is
-// created.
 func (s *Server) resolve(ctx context.Context, issuer, subject string, claims map[string]any) (users.User, error) {
 	u, err := s.accounts.ByIdentity(ctx, issuer, subject)
 	if !errors.Is(err, users.ErrNotFound) {
@@ -297,8 +330,6 @@ func (s *Server) resolve(ctx context.Context, issuer, subject string, claims map
 	if claim == "email" && claims["email_verified"] != true {
 		return u, refusal("Your email address is not verified, so it cannot be matched to an account.")
 	}
-	// Twice at most: a second sign-in of the same name may create the user
-	// between the lookup and the insert.
 	for range 2 {
 		u, err = s.accounts.ByName(ctx, value)
 		if errors.Is(err, users.ErrNotFound) {
@@ -327,10 +358,6 @@ func (s *Server) resolve(ctx context.Context, issuer, subject string, claims map
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
-		http.Error(w, "Cross-site request refused", http.StatusForbidden)
-		return
-	}
 	if c, err := r.Cookie(s.cookieName("session")); err == nil {
 		if err := s.sessions.Delete(r.Context(), c.Value); err != nil {
 			s.logger.Error("Could not end session", "error", err)
@@ -341,38 +368,11 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 type page struct {
-	User     users.User
-	SignedIn bool
-	Message  string
-	Retry    bool
+	Message string
+	Retry   bool
+	Home    bool
 }
 
-var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Souvenir</title>
-</head>
-<body>
-<h1>Souvenir</h1>
-{{if .Message}}
-<p>{{.Message}}</p>
-{{if .Retry}}<p><a href="/login">Sign in again</a></p>{{end}}
-{{else if .SignedIn}}
-<p>Signed in as {{.User.Name}}.</p>
-<form method="post" action="/logout"><button type="submit">Sign out</button></form>
-{{else}}
-<p><a href="/login">Sign in</a></p>
-{{end}}
-</body>
-</html>
-`))
-
 func (s *Server) page(w http.ResponseWriter, status int, p page) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	if err := pageTemplate.Execute(w, p); err != nil {
-		s.logger.Error("Could not render page", "error", err)
-	}
+	s.render(w, status, "page", p)
 }

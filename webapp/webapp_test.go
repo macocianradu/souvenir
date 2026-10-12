@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/dbtest"
+	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"github.com/go-jose/go-jose/v4"
@@ -126,20 +128,42 @@ func (p *provider) authorize(authURL string, nonce string, claims map[string]any
 type harness struct {
 	t        *testing.T
 	provider *provider
+	llm      *fakeLLM
 	server   *Server
 	handler  http.Handler
 	accounts *users.Store
+	history  *history.DbClient
 }
 
 func newHarness(t *testing.T) *harness {
 	pool := dbtest.Pool(t, "webapp")
 	p := newProvider(t)
+	model := newFakeLLM(t)
 	accounts := users.NewStore(pool)
+	hist := history.New(pool, config.DbConfig{ChunkSize: 50, ChunkOverlap: 10})
 	s := New(
 		config.WebConfig{Listen: ":0", BaseUrl: "http://souvenir.test", SessionDays: 1},
 		config.OidcConfig{Issuer: p.srv.URL, ClientId: clientId, ClientSecret: "secret", MatchClaim: "preferred_username"},
-		accounts, sessions.NewStore(pool))
-	return &harness{t: t, provider: p, server: s, handler: s.Handler(), accounts: accounts}
+		accounts, sessions.NewStore(pool),
+		App{
+			Config: config.Config{
+				Api: config.ApiConfig{Url: model.srv.URL, Timeout: 5000},
+				Llm: config.LLMConfig{Model: "small", MaxToolRounds: 3, KeepRecent: 2},
+			},
+			History: hist,
+			Agent:   agent.New(nil, nil, nil),
+		})
+	return &harness{t: t, provider: p, llm: model, server: s, handler: s.Handler(), accounts: accounts, history: hist}
+}
+
+// whoIs is the user a page says is signed in, or "".
+func whoIs(page string) string {
+	_, rest, ok := strings.Cut(page, `<span class="who">`)
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, "<")
+	return name
 }
 
 func (h *harness) do(r *http.Request) *httptest.ResponseRecorder {
@@ -205,7 +229,7 @@ func TestSignIn_CreatesNewUsersAndLinksOnceBySubject(t *testing.T) {
 	if w.Code != http.StatusSeeOther || session == nil || !session.HttpOnly || session.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("%d %+v %s", w.Code, session, w.Body)
 	}
-	if !strings.Contains(h.home(session), "Signed in as dana") {
+	if whoIs(h.home(session)) != "dana" {
 		t.Fatal("the session does not sign in")
 	}
 	if u, err := h.accounts.ByName(ctx, "dana"); err != nil || u.IsAdmin {
@@ -214,7 +238,7 @@ func TestSignIn_CreatesNewUsersAndLinksOnceBySubject(t *testing.T) {
 
 	// Once linked, the subject decides: a renamed account is still dana...
 	w = h.signIn(signIn{claims: map[string]any{"sub": "sub-1", "preferred_username": "dana-renamed"}})
-	if w.Code != http.StatusSeeOther || !strings.Contains(h.home(cookie(w, "souvenir-session")), "Signed in as dana.") {
+	if w.Code != http.StatusSeeOther || whoIs(h.home(cookie(w, "souvenir-session"))) != "dana" {
 		t.Fatalf("linked login: %d %s", w.Code, w.Body)
 	}
 	if _, err := h.accounts.ByName(ctx, "dana-renamed"); err == nil {
@@ -229,7 +253,7 @@ func TestSignIn_CreatesNewUsersAndLinksOnceBySubject(t *testing.T) {
 	if n, err := h.accounts.Unlink(ctx, "dana"); err != nil || n != 1 {
 		t.Fatalf("unlinked %d: %v", n, err)
 	}
-	if strings.Contains(h.home(session), "Signed in") {
+	if whoIs(h.home(session)) != "" {
 		t.Fatal("unlinking kept the session")
 	}
 	if w := h.signIn(signIn{claims: dana("sub-2")}); w.Code != http.StatusSeeOther {
@@ -300,7 +324,7 @@ func TestLogout_NeedsTheSameOriginAndEndsTheSession(t *testing.T) {
 	if w := h.do(cross); w.Code != http.StatusForbidden {
 		t.Fatalf("cross-site logout answered %d", w.Code)
 	}
-	if !strings.Contains(h.home(session), "Signed in") {
+	if whoIs(h.home(session)) == "" {
 		t.Fatal("a refused logout ended the session")
 	}
 
@@ -310,7 +334,7 @@ func TestLogout_NeedsTheSameOriginAndEndsTheSession(t *testing.T) {
 	if w := h.do(same); w.Code != http.StatusSeeOther {
 		t.Fatalf("logout answered %d", w.Code)
 	}
-	if strings.Contains(h.home(session), "Signed in") {
+	if whoIs(h.home(session)) != "" {
 		t.Fatal("the session outlived logout")
 	}
 }
@@ -344,7 +368,7 @@ func TestRequireUser_RunsAsTheSessionsUser(t *testing.T) {
 }
 
 func TestCookies_UseTheHostPrefixOverHttps(t *testing.T) {
-	s := New(config.WebConfig{BaseUrl: "https://llm.example.com"}, config.OidcConfig{}, nil, nil)
+	s := New(config.WebConfig{BaseUrl: "https://llm.example.com"}, config.OidcConfig{}, nil, nil, App{})
 	w := httptest.NewRecorder()
 	s.setCookie(w, "session", "v", time.Hour)
 	c := w.Result().Cookies()[0]

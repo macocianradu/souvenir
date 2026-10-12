@@ -175,7 +175,7 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 	}
 	rows, err := cl.pool.Query(ctx,
 		`
-		   SELECT c.id, COALESCE(c.title, ''), COALESCE(c.summary, ''), COALESCE(first.content, '')
+		   SELECT c.id, COALESCE(c.title, ''), COALESCE(c.summary, ''), COALESCE(first.content, ''), c.updated_at
 		     FROM conversations c
 		LEFT JOIN LATERAL (
 		              SELECT content
@@ -196,7 +196,7 @@ func (cl DbClient) GetConversations(ctx context.Context) ([]model.Conversation, 
 	conversations := []model.Conversation{}
 	for rows.Next() {
 		var conv model.Conversation
-		if err := rows.Scan(&conv.Id, &conv.Title, &conv.Summary, &conv.Preview); err != nil {
+		if err := rows.Scan(&conv.Id, &conv.Title, &conv.Summary, &conv.Preview, &conv.UpdatedAt); err != nil {
 			cl.logger.Error("Could not read conversation", "error", err)
 			return nil, err
 		}
