@@ -1,51 +1,22 @@
 package ui
 
 import (
-	"context"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
-	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
-	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
-func (m uiModel) callAgent(ctx context.Context, messages []model.Message) tea.Cmd {
-	m.logger.Debug("Calling agent", "messages", len(messages))
-	return func() tea.Msg {
-		resp, err := m.client.QueryStream(ctx, messages, m.tools.Specs())
-		if err != nil {
-			m.logger.Error("Error while calling stream query", "error", err)
-			return streamClosedMessage{err: err}
-		}
-		return streamStartedMessage{ch: resp}
-	}
-}
-
-func (m uiModel) runTools(ctx context.Context, calls []model.ToolCall) tea.Cmd {
-	ctx = tools.WithConversation(ctx, m.conversation.Id)
-	return func() tea.Msg {
-		var results []model.Message
-		for _, call := range calls {
-			if ctx.Err() != nil {
-				break
-			}
-			results = append(results, m.tools.Call(ctx, call))
-		}
-		return toolsDoneMessage{results: results}
-	}
-}
-
-func waitForEvent(ch <-chan llm.StreamEvent) tea.Cmd {
+func waitForEvent(ch <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
 			return streamClosedMessage{}
 		}
-		return streamEventMessage{event: ev}
+		return agentEventMessage{event: ev}
 	}
 }
 
@@ -97,19 +68,6 @@ func (m uiModel) summarizeConversation() tea.Cmd {
 func (m uiModel) deleteConversation(item modelItem) tea.Cmd {
 	return func() tea.Msg {
 		return itemDeletedMessage{item: item, err: m.history.DeleteConversation(m.ctx, item.id)}
-	}
-}
-
-const recallTimeout = 3 * time.Second
-
-func (m uiModel) recallMemories(ctx context.Context, query string) tea.Cmd {
-	turn := m.turn
-	limit := m.client.Cfg.Llm.MemoryRecall
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, recallTimeout)
-		defer cancel()
-		found, err := m.memories.Search(ctx, query, limit)
-		return memoriesRecalledMessage{turn: turn, memories: found, err: err}
 	}
 }
 

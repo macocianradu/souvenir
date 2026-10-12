@@ -2,13 +2,11 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/cursor"
 	tea "charm.land/bubbletea/v2"
-	llm "git.estatecloud.org/radumaco/souvenir/llm"
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
@@ -19,6 +17,23 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.ClipboardMsg:
+		return m.paste(tea.PasteMsg{Content: msg.Content})
+
+	case tea.PasteMsg:
+		return m.paste(msg)
+
+	case imagePastedMsg:
+		if m.focus == focusChat {
+			m.attachments = append(m.attachments, msg.image)
+			m.layout()
+		}
+		return m, nil
+
+	case pasteFailedMsg:
+		m.setErrorMessage("Could not paste: " + msg.err.Error())
+		return m, nil
 
 	case cursor.BlinkMsg:
 		if m.focus != focusChat {
@@ -34,9 +49,6 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.searchHistory(msg.query)
 
-	case memoriesRecalledMessage:
-		return m.handleMemoriesRecalled(msg)
-
 	case tea.MouseWheelMsg:
 		if m.focus == focusChat {
 			var cmd tea.Cmd
@@ -47,12 +59,8 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationRenamedMessage:
 		return m.handleRenamed(msg)
 
-	case streamStartedMessage:
-		m.streamCh = msg.ch
-		return m, waitForEvent(m.streamCh)
-
-	case streamEventMessage:
-		return m.handleStreamEvent(msg.event)
+	case agentEventMessage:
+		return m.handleAgentEvent(msg.event)
 
 	case streamClosedMessage:
 		return m.handleStreamClosed(msg)
@@ -89,9 +97,6 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case conversationSavedMessage:
 		return m.handleSaved(msg)
 
-	case toolsDoneMessage:
-		return m.handleToolsDone(msg)
-
 	case summarizedMessage:
 		m.summarizing = false
 		if msg.err != nil {
@@ -113,7 +118,18 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	return m, spinnerCmd
+	var cmd tea.Cmd
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, tea.Batch(spinnerCmd, cmd)
+}
+
+func (m uiModel) paste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if m.focus != focusChat {
+		var cmd tea.Cmd
+		m.picker, cmd = m.picker.Update(msg)
+		return m, cmd
+	}
+	return m.updateTextarea(msg)
 }
 
 func (m uiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -129,10 +145,20 @@ func (m uiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.closeCommands()
 		} else if m.streaming && m.cancelStream != nil {
 			m.cancelStream()
+		} else if len(m.attachments) > 0 {
+			m.attachments = nil
+			m.layout()
 		}
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
+	case "ctrl+v":
+		// Over SSH the local clipboard is the server's, so ask the terminal,
+		// which only hands over text.
+		if m.remote {
+			return m, tea.ReadClipboard
+		}
+		return m, pasteFromClipboard
 	case "pgup":
 		m.viewport.PageUp()
 		return m, nil
@@ -205,7 +231,7 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if strings.TrimSpace(input) == "" {
+	if strings.TrimSpace(input) == "" && len(m.attachments) == 0 {
 		return m, nil
 	}
 	if m.streaming {
@@ -218,53 +244,18 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.logger.Debug("Creating new message", "message", input)
 
 	m.thinkingBuffer.Reset()
-	m.appendMessage(model.Message{Content: input, Role: "user"})
+	m.appendMessage(model.Message{Content: input, Role: "user", Images: m.attachments})
+	m.attachments = nil
+	m.layout()
 	m.refreshViewport()
 	m.viewport.GotoBottom()
 	m.streaming = true
 	m.streamCtx, m.cancelStream = context.WithCancel(m.ctx)
-	m.toolRounds = 0
 	m.toolTrail = nil
-	m.turn++
 	m.turnMemories = nil
 	m.startWait()
-	start := m.callAgent(m.streamCtx, m.turnContext())
-	if m.memories != nil && m.client.Cfg.Llm.MemoryRecall > 0 {
-		start = m.recallMemories(m.streamCtx, input)
-	}
-	return m, tea.Batch(start, m.requestSave(), m.spinner.Tick)
-}
-
-func (m uiModel) handleMemoriesRecalled(msg memoriesRecalledMessage) (tea.Model, tea.Cmd) {
-	if !m.streaming || msg.turn != m.turn {
-		return m, nil
-	}
-	if m.streamCtx.Err() != nil {
-		return m.handleStreamClosed(streamClosedMessage{})
-	}
-	if msg.err != nil {
-		m.logger.Warn("Could not recall memories", "error", msg.err)
-	}
-	m.turnMemories = msg.memories
-	m.refreshViewport()
-	return m, m.callAgent(m.streamCtx, m.turnContext())
-}
-
-func (m uiModel) turnContext() []model.Message {
-	now := time.Now().In(m.location)
-	context := []model.Message{{Role: "system", Content: "The current date and time is " + now.Format("Monday 2006-01-02 15:04 MST") + "."}}
-	if len(m.turnMemories) > 0 {
-		var b strings.Builder
-		b.WriteString("Facts saved about the user in earlier conversations, with their ids. Use them when " +
-			"relevant. When the user says something that refines, corrects or replaces one of them, call " +
-			"memory_update with its id rather than saving a new memory.")
-		for _, mem := range m.turnMemories {
-			b.WriteString("\n- [" + mem.Id + "] " + mem.Content)
-		}
-		context = append(context, model.Message{Role: "system", Content: b.String()})
-	}
-	context = append(context, m.conversation.ContextMessages()...)
-	return append(context, m.toolTrail...)
+	m.streamCh = m.agent.Run(m.streamCtx, m.client, m.conversation)
+	return m, tea.Batch(waitForEvent(m.streamCh), m.requestSave(), m.spinner.Tick)
 }
 
 func (m *uiModel) appendMessage(msg model.Message) {
@@ -278,50 +269,28 @@ func (m uiModel) runCommand(c command, args string) (tea.Model, tea.Cmd) {
 	return c.handler(m, args)
 }
 
-func (m uiModel) handleStreamEvent(ev llm.StreamEvent) (tea.Model, tea.Cmd) {
-	if ev.Err != nil {
-		m.logger.Error("There was an error mid stream", "error", ev.Err)
+func (m uiModel) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
+	switch {
+	case ev.Err != nil:
+		m.logger.Error("The turn failed", "error", ev.Err)
 		return m.handleStreamClosed(streamClosedMessage{err: ev.Err})
-	}
-	m.thinkingBuffer.WriteString(ev.Reasoning)
-	m.answerBuffer.WriteString(ev.Content)
-
-	if ev.Done {
+	case ev.Reply != nil:
 		m.answerBuffer.Reset()
-		for _, r := range ev.Messages {
-			if len(r.ToolCalls) > 0 {
-				return m.handleToolCalls(r)
-			}
+		for _, r := range ev.Reply {
 			m.appendMessage(r)
 		}
 		return m.handleStreamClosed(streamClosedMessage{})
+	case ev.Trail != nil:
+		// What streamed so far was the text of the tool request, now in the trail.
+		m.answerBuffer.Reset()
+		m.toolTrail = append(m.toolTrail, ev.Trail...)
+	case ev.Memories != nil:
+		m.turnMemories = ev.Memories
 	}
-
+	m.thinkingBuffer.WriteString(ev.Reasoning)
+	m.answerBuffer.WriteString(ev.Content)
 	m.refreshViewport()
 	return m, waitForEvent(m.streamCh)
-}
-
-func (m uiModel) handleToolCalls(reply model.Message) (tea.Model, tea.Cmd) {
-	m.streamCh = nil
-	if m.toolRounds >= m.client.Cfg.Llm.MaxToolRounds {
-		return m.handleStreamClosed(streamClosedMessage{err: errors.New("tool call limit reached")})
-	}
-	m.toolRounds++
-	m.toolTrail = append(m.toolTrail, reply)
-	m.refreshViewport()
-	return m, m.runTools(m.streamCtx, reply.ToolCalls)
-}
-
-func (m uiModel) handleToolsDone(msg toolsDoneMessage) (tea.Model, tea.Cmd) {
-	if !m.streaming {
-		return m, nil
-	}
-	m.toolTrail = append(m.toolTrail, msg.results...)
-	if m.streamCtx.Err() != nil {
-		return m.handleStreamClosed(streamClosedMessage{})
-	}
-	m.refreshViewport()
-	return m, m.callAgent(m.streamCtx, m.turnContext())
 }
 
 func (m uiModel) handleStreamClosed(msg streamClosedMessage) (tea.Model, tea.Cmd) {

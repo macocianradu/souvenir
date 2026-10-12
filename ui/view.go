@@ -22,6 +22,9 @@ func (m uiModel) View() tea.View {
 	if m.commands.open {
 		parts = append(parts, m.commands.view())
 	}
+	if len(m.attachments) > 0 {
+		parts = append(parts, m.attachmentsView())
+	}
 	above := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	ui := lipgloss.JoinVertical(lipgloss.Left, above, m.textarea.View())
 
@@ -35,4 +38,8 @@ func (m uiModel) View() tea.View {
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	return view
+}
+
+func (m uiModel) attachmentsView() string {
+	return toolStyle.Render(imageLabel(len(m.attachments)) + " attached, Esc removes")
 }

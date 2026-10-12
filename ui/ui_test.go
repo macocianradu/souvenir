@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/llm"
@@ -33,7 +35,7 @@ func newHarness(t *testing.T, apiUrl string, registry *tools.Registry) *harness 
 		Api: config.ApiConfig{Url: apiUrl, Timeout: 1000},
 		Llm: config.LLMConfig{MaxToolRounds: 3, KeepRecent: 2},
 	}
-	h := &harness{t: t, m: InitialModel(context.Background(), cfg, history.DbClient{}, nil, registry, nil)}
+	h := &harness{t: t, m: InitialModel(context.Background(), false, cfg, history.DbClient{}, nil, agent.New(registry, nil, nil), nil)}
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	return h
 }
@@ -64,7 +66,7 @@ func (h *harness) submit(text string) tea.Cmd {
 }
 
 func (h *harness) reply(content string) {
-	h.send(streamEventMessage{event: llm.StreamEvent{Done: true, Messages: []model.Message{{Role: "assistant", Content: content}}}})
+	h.send(agentEventMessage{event: agent.Event{Reply: []model.Message{{Role: "assistant", Content: content}}}})
 }
 
 // pump runs commands the way the tea runtime would. Saves never reach the
@@ -137,15 +139,15 @@ func TestSave_RunsOneAtATimeAndOnlyCopiesIdsBack(t *testing.T) {
 func TestStream_FailureOrEscKeepsThePartialAnswer(t *testing.T) {
 	h := newHarness(t, "", nil)
 	h.submit("q")
-	h.send(streamEventMessage{event: llm.StreamEvent{Content: "part"}})
-	h.send(streamEventMessage{event: llm.StreamEvent{Err: errors.New("boom")}})
+	h.send(agentEventMessage{event: agent.Event{Content: "part"}})
+	h.send(agentEventMessage{event: agent.Event{Err: errors.New("boom")}})
 	if h.m.streaming || h.roles() != "user,assistant" || !strings.Contains(h.status(), "boom") {
 		t.Fatalf("%s / %q", h.roles(), h.status())
 	}
 
 	h.submit("again")
 	ctx := h.m.streamCtx
-	h.send(streamEventMessage{event: llm.StreamEvent{Content: "half"}})
+	h.send(agentEventMessage{event: agent.Event{Content: "half"}})
 	h.key("esc")
 	if ctx.Err() == nil {
 		t.Fatal("esc did not cancel")
@@ -207,7 +209,7 @@ func TestAutoTitle(t *testing.T) {
 	h.m.saving, h.m.saveQueued = false, false
 	h.submit("/new")
 	h.submit("q")
-	h.send(streamEventMessage{event: llm.StreamEvent{Err: errors.New("boom")}})
+	h.send(agentEventMessage{event: agent.Event{Err: errors.New("boom")}})
 	if h.m.titling {
 		t.Fatal("titled after a failed reply")
 	}
@@ -229,7 +231,7 @@ func TestAutoTitle(t *testing.T) {
 func TestRender_ThinkingSitsFadedAboveTheAnswerUntilTheNextMessage(t *testing.T) {
 	h := newHarness(t, "", nil)
 	h.submit("q1")
-	h.send(streamEventMessage{event: llm.StreamEvent{Reasoning: "pondering"}})
+	h.send(agentEventMessage{event: agent.Event{Reasoning: "pondering"}})
 	h.reply("answer")
 	screen := h.screen()
 	if !strings.Contains(screen, "Thinking: pondering") || strings.Index(screen, "pondering") > strings.Index(screen, "Agent: answer") {
@@ -335,7 +337,7 @@ func TestScroll_ReadingBackIsNotUndoneByNewOutput(t *testing.T) {
 	}
 	h.send(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	offset := h.m.viewport.YOffset()
-	h.send(streamEventMessage{event: llm.StreamEvent{Content: "token"}})
+	h.send(agentEventMessage{event: agent.Event{Content: "token"}})
 	if h.m.viewport.YOffset() != offset {
 		t.Fatal("streamed output pulled the view down")
 	}
@@ -440,5 +442,60 @@ func TestHistory_DeleteNeedsConfirmationAndStaysDeleted(t *testing.T) {
 	models, _ = pickerKey(models, "x")
 	if models.confirm != nil {
 		t.Fatal("delete offered outside history")
+	}
+}
+
+func TestPaste_TerminalPasteAndClipboardReplyReachTheInput(t *testing.T) {
+	h := newHarness(t, "http://unused", nil)
+	h.send(tea.PasteMsg{Content: "pasted "})
+	h.send(tea.ClipboardMsg{Content: "from the clipboard"})
+	if got := h.m.textarea.Value(); got != "pasted from the clipboard" {
+		t.Fatalf("input is %q", got)
+	}
+}
+
+func TestPaste_CtrlVOverSSHAsksTheTerminalForTheClipboard(t *testing.T) {
+	h := newHarness(t, "http://unused", nil)
+	h.m.remote = true
+	_, cmd := h.m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("no command")
+	}
+	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.readClipboardMsg" {
+		t.Fatalf("got %T", msg)
+	}
+}
+
+func TestImagePaste_AttachesUntilSentOrRemoved(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"A cat\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	h := newHarness(t, srv.URL, nil)
+	h.m.saving = true
+	img := model.Image{MediaType: "image/png", Data: []byte("png")}
+
+	h.send(imagePastedMsg{img})
+	if len(h.m.attachments) != 1 || ansi.Strip(h.m.attachmentsView()) != "[image] attached, Esc removes" {
+		t.Fatalf("attachment not shown: %q", ansi.Strip(h.m.attachmentsView()))
+	}
+	h.key("esc")
+	if len(h.m.attachments) != 0 {
+		t.Fatal("esc did not remove the attachment")
+	}
+
+	h.send(imagePastedMsg{img})
+	h.pump(h.submit(""))
+	if len(bodies) == 0 || !strings.Contains(bodies[0], `"image_url":{"url":"data:image/png;base64,cG5n"}`) {
+		t.Fatalf("image not sent: %v", bodies)
+	}
+	if len(h.m.attachments) != 0 || len(h.m.conversation.Messages[0].Images) != 1 {
+		t.Fatalf("attachments %d, message images %d", len(h.m.attachments), len(h.m.conversation.Messages[0].Images))
+	}
+	if !strings.Contains(h.screen(), "You: [image]") {
+		t.Fatalf("\n%s", h.screen())
 	}
 }

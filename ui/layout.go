@@ -46,6 +46,9 @@ func (m *uiModel) layout() {
 	if m.commands.open {
 		h -= lipgloss.Height(m.commands.view())
 	}
+	if len(m.attachments) > 0 {
+		h -= lipgloss.Height(m.attachmentsView())
+	}
 	follow := m.viewport.AtBottom()
 	m.viewport.SetHeight(max(h, 1))
 	if follow {

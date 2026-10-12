@@ -89,6 +89,14 @@ clearing the search, and `x` (or Delete) on a conversation deletes it, with its 
 and search index, after a confirmation, since it cannot be undone. `/rename` asks the title model for a title, and `/rename <title>` sets one
 by hand.
 
+Text pastes with the terminal's own paste (Shift+Insert, Ctrl+Shift+V) and with
+Ctrl+V. Run locally, Ctrl+V also takes an image (PNG, JPEG, WebP or GIF, up to
+10 MB) from the clipboard through `wl-paste` or `xclip`. It is attached to the
+next message, shown above the input, and Esc removes it. Over SSH, Ctrl+V asks
+the terminal for its clipboard (OSC 52), which carries text only, so images
+cannot be pasted there. The chat model has to accept images; one that does not
+fails the turn.
+
 ### Storage
 
 Postgres, via `pgx`. The app creates its own database and schema on first run.
@@ -98,6 +106,9 @@ conversation, and saves are incremental: only messages past the stored maximum
 sequence get written. Every message carries a generated `tsvector` column with a
 GIN index, which gives keyword search for free and is half of the hybrid
 search.
+
+Pasted images are stored with their message in `message_images` and sent
+again whenever the conversation is, so a reopened conversation still has them.
 
 Messages are split into overlapping word chunks and stored with a hash of their
 content, which is what makes re-embedding idempotent.

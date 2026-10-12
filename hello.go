@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db"
@@ -28,12 +29,12 @@ type app struct {
 	cfg      *config.Config
 	history  *history.DbClient
 	searcher *search.Searcher
-	registry *tools.Registry
+	agent    *agent.Agent
 	memories *memory.Store
 }
 
-func (a app) newModel(ctx context.Context) tea.Model {
-	return ui.InitialModel(ctx, *a.cfg, *a.history, a.searcher, a.registry, a.memories)
+func (a app) newModel(ctx context.Context, remote bool) tea.Model {
+	return ui.InitialModel(ctx, remote, *a.cfg, *a.history, a.searcher, a.agent, a.memories)
 }
 
 func main() {
@@ -86,22 +87,26 @@ func main() {
 	if config.Fetch.Enabled {
 		toolset = append(toolset, tools.WebFetch(web.NewFetcher(config.Fetch), config.Fetch.MaxChars))
 	}
+	location := time.Local
+	if tz := config.Calendars.Timezone; tz != "" {
+		location, _ = time.LoadLocation(tz)
+	}
 	a := app{
 		cfg:      config,
 		history:  history.New(pool, config.Db),
 		searcher: searcher,
-		registry: tools.NewRegistry(toolset...),
+		agent:    agent.New(tools.NewRegistry(toolset...), memories, location),
 		memories: memories,
 	}
 
 	switch mode := strings.Join(os.Args[1:], " "); mode {
 	case "":
-		p := tea.NewProgram(a.newModel(ctx))
+		p := tea.NewProgram(a.newModel(ctx, false))
 		if _, err := p.Run(); err != nil {
 			fatal("Alas, there's been an error", err)
 		}
 	case "serve":
-		if err := serve(ctx, config.Ssh, a.newModel); err != nil {
+		if err := serve(ctx, config.Ssh, func(ctx context.Context) tea.Model { return a.newModel(ctx, true) }); err != nil {
 			fatal("SSH server error", err)
 		}
 	default:

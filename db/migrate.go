@@ -85,6 +85,15 @@ var migrations = []string{
 	`
 	ALTER TABLE conversations DROP COLUMN summary_through_seq;
 	`,
+	`
+	CREATE TABLE message_images (
+		message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+		position   INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		data       BYTEA NOT NULL,
+		PRIMARY KEY (message_id, position)
+	);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

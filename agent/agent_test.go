@@ -1,0 +1,103 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/llm"
+	"git.estatecloud.org/radumaco/souvenir/model"
+	"git.estatecloud.org/radumaco/souvenir/tools"
+)
+
+// toolServer asks for the echo tool until it has answered `rounds` times,
+// then replies with text.
+func toolServer(t *testing.T, rounds int) llm.ChatClient {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.ChatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		answered := 0
+		for _, m := range req.Messages {
+			if m.Role == "tool" {
+				answered++
+			}
+		}
+		if answered >= rounds {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Final\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Checking\",\"tool_calls\":[{\"index\":0,\"id\":\"call_%d\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n", answered)
+	}))
+	t.Cleanup(srv.Close)
+	return *llm.NewLLMClient(config.Config{
+		Api: config.ApiConfig{Url: srv.URL, Timeout: 1000},
+		Llm: config.LLMConfig{MaxToolRounds: 2},
+	})
+}
+
+func echoAgent() *Agent {
+	return New(tools.NewRegistry(tools.Tool{Name: "echo", Run: func(context.Context, json.RawMessage) (string, error) {
+		return "pong", nil
+	}}), nil, nil)
+}
+
+func conversation() model.Conversation {
+	return model.Conversation{Messages: []model.Message{{Role: "user", Content: "hi", Seq: 1}}}
+}
+
+func TestRun_StreamsEachToolRoundThenTheReply(t *testing.T) {
+	var trail []model.Message
+	var content string
+	var reply []model.Message
+	for ev := range echoAgent().Run(context.Background(), toolServer(t, 2), conversation()) {
+		if ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+		content += ev.Content
+		trail = append(trail, ev.Trail...)
+		reply = append(reply, ev.Reply...)
+	}
+	if len(trail) != 4 || trail[0].ToolCalls[0].Id != "call_0" || trail[1].Content != "pong" || trail[3].ToolCallId != "call_1" {
+		t.Fatalf("trail %+v", trail)
+	}
+	if len(reply) != 1 || reply[0].Content != "Final" {
+		t.Fatalf("reply %+v", reply)
+	}
+	if content != "CheckingCheckingFinal" {
+		t.Fatalf("streamed %q", content)
+	}
+}
+
+func TestRun_StopsAtTheToolRoundLimit(t *testing.T) {
+	var last Event
+	for ev := range echoAgent().Run(context.Background(), toolServer(t, 3), conversation()) {
+		last = ev
+	}
+	if !errors.Is(last.Err, ErrToolLimit) {
+		t.Fatalf("last event %+v", last)
+	}
+}
+
+func TestRun_CancelClosesTheChannelWithoutAReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	events := echoAgent().Run(ctx, toolServer(t, 2), conversation())
+	<-events
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("the channel did not close after cancel")
+		}
+	}
+}

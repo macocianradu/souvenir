@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"git.estatecloud.org/radumaco/souvenir/model"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -78,7 +79,7 @@ func (m *uiModel) renderMessages() string {
 		}
 		switch message.Role {
 		case "user":
-			entry(lipgloss.PlaceHorizontal(width, lipgloss.Right, m.senderStyle.Render("You: ")+message.Content))
+			entry(lipgloss.PlaceHorizontal(width, lipgloss.Right, m.senderStyle.Render("You: ")+userText(message)))
 		case "assistant":
 			entry(m.agentStyle.Render("Agent: ") + formatMarkdown(message.Content))
 		}
@@ -91,4 +92,11 @@ func (m *uiModel) renderMessages() string {
 		entry(m.agentStyle.Render("Agent: ") + formatMarkdown(m.answerBuffer.String()))
 	}
 	return b.String()
+}
+
+func userText(message model.Message) string {
+	if len(message.Images) == 0 {
+		return message.Content
+	}
+	return strings.TrimSpace(message.Content + " " + toolStyle.Render(imageLabel(len(message.Images))))
 }

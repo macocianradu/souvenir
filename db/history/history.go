@@ -66,6 +66,10 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 		cl.logger.Error("Could not fetch messages", "conversation_id", id, "error", err)
 		return conv, err
 	}
+	if err := cl.loadImages(ctx, &conv); err != nil {
+		cl.logger.Error("Could not fetch images", "conversation_id", id, "error", err)
+		return conv, err
+	}
 	var summary model.ContextSummary
 	err = cl.pool.QueryRow(ctx,
 		`
@@ -84,6 +88,37 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	}
 	cl.logger.Debug("Found conversation", "id", conv.Id, "messages", len(conv.Messages))
 	return conv, nil
+}
+
+func (cl DbClient) loadImages(ctx context.Context, conv *model.Conversation) error {
+	rows, err := cl.pool.Query(ctx,
+		`
+		  SELECT i.message_id, i.media_type, i.data
+		    FROM message_images i
+		    JOIN messages m ON m.id = i.message_id
+		   WHERE m.conversation_id = $1
+		ORDER BY i.message_id, i.position
+		`, conv.Id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byMessage := map[string][]model.Image{}
+	for rows.Next() {
+		var messageId string
+		var img model.Image
+		if err := rows.Scan(&messageId, &img.MediaType, &img.Data); err != nil {
+			return err
+		}
+		byMessage[messageId] = append(byMessage[messageId], img)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range conv.Messages {
+		conv.Messages[i].Images = byMessage[conv.Messages[i].Id]
+	}
+	return nil
 }
 
 func (cl DbClient) DeleteConversation(ctx context.Context, id string) error {
@@ -224,6 +259,16 @@ func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId st
 		`,
 		message.Seq, message.Role, message.Content, conversationId).Scan(&id); err != nil {
 		return "", err
+	}
+
+	for i, img := range message.Images {
+		if _, err := tx.Exec(ctx,
+			`
+			INSERT INTO message_images (message_id, position, media_type, data)
+			     VALUES ($1, $2, $3, $4)
+			`, id, i, img.MediaType, img.Data); err != nil {
+			return "", fmt.Errorf("insert image: %w", err)
+		}
 	}
 
 	if message.Role != "user" && message.Role != "assistant" {

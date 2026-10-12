@@ -40,10 +40,14 @@ func (c Conversation) ContextMessages() []Message {
 	return append([]Message{summary}, c.Unsummarized()...)
 }
 
+// Images cost the model a few hundred to a few thousand tokens depending on
+// their size; this is a middle guess.
+const imageTokens = 1500
+
 func EstimateTokens(messages []Message) int {
 	tokens := 0
 	for _, m := range messages {
-		tokens += len(m.Content)/4 + 4
+		tokens += len(m.Content)/4 + 4 + len(m.Images)*imageTokens
 	}
 	return tokens
 }

@@ -4,20 +4,19 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"git.estatecloud.org/radumaco/souvenir/agent"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	llm "git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
-	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
 type focusState int
@@ -48,8 +47,8 @@ type uiModel struct {
 	commands       commandList
 	history        history.DbClient
 	searcher       *search.Searcher
-	tools          *tools.Registry
-	streamCh       <-chan llm.StreamEvent
+	agent          *agent.Agent
+	streamCh       <-chan agent.Event
 	streamCtx      context.Context
 	cancelStream   context.CancelFunc
 	ctx            context.Context
@@ -62,35 +61,24 @@ type uiModel struct {
 	titling        bool
 	summarizing    bool
 	convGen        int
-	toolRounds     int
 	toolTrail      []model.Message
 	memories       *memory.Store
-	turn           int
 	turnMemories   []memory.Memory
-	location       *time.Location
+	remote         bool
+	attachments    []model.Image
 }
 
-type streamEventMessage struct {
-	event llm.StreamEvent
+type agentEventMessage struct {
+	event agent.Event
 }
 
 type streamClosedMessage struct {
 	err error
 }
 
-type streamStartedMessage struct {
-	ch <-chan llm.StreamEvent
-}
-
 type conversationSavedMessage struct {
 	conversation model.Conversation
 	err          error
-}
-
-type memoriesRecalledMessage struct {
-	turn     int
-	memories []memory.Memory
-	err      error
 }
 
 type itemDeletedMessage struct {
@@ -104,10 +92,6 @@ type summarizedMessage struct {
 	gen     int
 }
 
-type toolsDoneMessage struct {
-	results []model.Message
-}
-
 type conversationRenamedMessage struct {
 	title   string
 	summary string
@@ -116,7 +100,7 @@ type conversationRenamedMessage struct {
 	auto    bool
 }
 
-func InitialModel(ctx context.Context, config config.Config, client history.DbClient, searcher *search.Searcher, registry *tools.Registry, memories *memory.Store) uiModel {
+func InitialModel(ctx context.Context, remote bool, config config.Config, client history.DbClient, searcher *search.Searcher, agent *agent.Agent, memories *memory.Store) uiModel {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message..."
 	ta.SetVirtualCursor(false)
@@ -132,6 +116,7 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 	ta.SetStyles(s)
 
 	ta.ShowLineNumbers = false
+	ta.KeyMap.Paste.SetEnabled(false)
 
 	vp := viewport.New(viewport.WithWidth(30), viewport.WithHeight(5))
 	vp.SetContent(renderLanding(vp.Width(), vp.Height()))
@@ -142,11 +127,6 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-
-	location := time.Local
-	if tz := config.Calendars.Timezone; tz != "" {
-		location, _ = time.LoadLocation(tz)
-	}
 
 	ui := uiModel{
 		textarea:       ta,
@@ -162,10 +142,10 @@ func InitialModel(ctx context.Context, config config.Config, client history.DbCl
 		focus:          focusChat,
 		history:        client,
 		searcher:       searcher,
-		tools:          registry,
+		agent:          agent,
 		memories:       memories,
 		ctx:            ctx,
-		location:       location,
+		remote:         remote,
 		logger:         *slog.Default().With("Component", "TUI"),
 	}
 	ui.picker = newPicker()
