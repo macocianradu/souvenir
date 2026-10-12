@@ -10,17 +10,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/agent"
+	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/dbtest"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 	"github.com/go-jose/go-jose/v4"
 )
 
@@ -133,6 +138,9 @@ type harness struct {
 	handler  http.Handler
 	accounts *users.Store
 	history  *history.DbClient
+	settings *settings.Store
+	// calendarRoot holds dana's calendars.
+	calendarRoot string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -141,6 +149,22 @@ func newHarness(t *testing.T) *harness {
 	model := newFakeLLM(t)
 	accounts := users.NewStore(pool)
 	hist := history.New(pool, config.DbConfig{ChunkSize: 50, ChunkOverlap: 10})
+	// dana has her own calendars; nobody else does.
+	calRoot := t.TempDir()
+	for _, dir := range []string{"dana/home", "dana/work", "dana/assistant"} {
+		os.MkdirAll(filepath.Join(calRoot, dir), 0o755)
+	}
+	cals, err := calendar.New(config.CalendarsConfig{Path: calRoot, Read: []string{"work"}, Write: []string{"assistant"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(tools.Tool{
+		Name:        "echo",
+		Description: "Repeat what it is given. Only for tests.",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+		Run:         func(context.Context, json.RawMessage) (string, error) { return "echo", nil },
+	}).Provide(tools.CalendarTools(cals))
+	userSettings := settings.NewStore(pool)
 	s := New(
 		config.WebConfig{Listen: ":0", BaseUrl: "http://souvenir.test", SessionDays: 1},
 		config.OidcConfig{Issuer: p.srv.URL, ClientId: clientId, ClientSecret: "secret", MatchClaim: "preferred_username"},
@@ -150,10 +174,13 @@ func newHarness(t *testing.T) *harness {
 				Api: config.ApiConfig{Url: model.srv.URL, Timeout: 5000},
 				Llm: config.LLMConfig{Model: "small", MaxToolRounds: 3, KeepRecent: 2},
 			},
-			History: hist,
-			Agent:   agent.New(nil, nil, nil),
+			History:   hist,
+			Agent:     agent.New(registry, nil, nil).WithSettings(userSettings),
+			Settings:  userSettings,
+			Tools:     registry,
+			Calendars: cals,
 		})
-	return &harness{t: t, provider: p, llm: model, server: s, handler: s.Handler(), accounts: accounts, history: hist}
+	return &harness{t: t, provider: p, llm: model, server: s, handler: s.Handler(), accounts: accounts, history: hist, settings: userSettings, calendarRoot: calRoot}
 }
 
 // whoIs is the user a page says is signed in, or "".

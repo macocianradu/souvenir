@@ -266,6 +266,8 @@ a user name that is not a plain directory name is refused. A user without a
 directory is not offered the calendar tools at all. `Read` and
 `Write` name the calendars within each user's directory, the same for everyone.
 Renaming a user (`souvenir users rename`) means renaming their directory too.
+These lists are the defaults; each user can pick their own on the web settings
+page (see Settings).
 Environment variables in `Path` are expanded (`~` is not), and it must exist at
 startup or the calendar tools are disabled. The app never speaks CalDAV; it reads and writes those
 files and leaves syncing to `vdirsyncer`. Only calendars named in `Read` or
@@ -343,6 +345,24 @@ Pasting a clipboard that also holds text, such as a copy from a document,
 pastes the text instead. The server decides each image's type from its bytes
 and accepts only PNG, JPEG, WebP and GIF. Images are saved with the message, as
 in the TUI, and need a chat model that reads them.
+
+### Settings
+
+Each user has settings of their own, kept in `user_settings` and edited on the
+web at `/settings` (the gear next to your name). They apply from the next
+message, in the TUI as well, since the agent reads them at the start of every
+turn.
+
+- **Tools**: any tool can be turned off. A tool turned off is not offered to the
+  model at all, and a call to it is refused. Memory recall at the start of a
+  turn is not a tool and keeps working.
+- **Calendars**: which of the calendars in your own directory are read and which
+  are written; writing includes reading. Until you save a choice, the configured
+  `Read` and `Write` lists apply. Choosing none leaves you without calendar
+  tools.
+
+Only tools and calendar directories that exist are kept when saving, so a
+crafted form cannot name others.
 
 ### Web sign-in
 

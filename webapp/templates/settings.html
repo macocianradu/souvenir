@@ -1,0 +1,67 @@
+{{define "settings"}}<!doctype html>
+<html lang="en">
+{{template "head" "Settings"}}
+<body>
+<input type="checkbox" id="drawer" class="drawer-toggle" aria-label="Show conversations">
+<div class="app">
+  {{template "aside" .}}
+  <label for="drawer" class="scrim" aria-hidden="true"></label>
+
+  <main class="main">
+    <header class="topbar">
+      <label for="drawer" class="icon-btn menu" title="Conversations">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 16h14"/></svg>
+      </label>
+      <div class="heading"><h1>Settings</h1></div>
+    </header>
+
+    <div class="messages">
+      <form class="settings" method="post" action="/settings">
+        {{if .Saved}}<p class="saved" role="status">Saved. Your next message uses these settings.</p>{{end}}
+
+        <section class="panel">
+          <h2>Tools</h2>
+          <p class="muted">What your assistant may use. A tool turned off is not offered to it at all.</p>
+          {{range .Tools}}
+          <label class="choice">
+            <input type="checkbox" name="tool" value="{{.Name}}"{{if .Enabled}} checked{{end}}>
+            <span class="switch" aria-hidden="true"></span>
+            <span class="choice-text"><code>{{.Name}}</code><small>{{.Summary}}</small></span>
+          </label>
+          {{end}}
+        </section>
+
+        {{if .CalendarsEnabled}}
+        <section class="panel">
+          <h2>Calendars</h2>
+          {{if .Calendars}}
+          <input type="hidden" name="calendars" value="1">
+          <p class="muted">Which of your calendars your assistant reads, and which it may add to and change. Writing includes reading.{{if not .CustomCalendars}} These are the defaults until you save.{{end}}</p>
+          <table class="calendars">
+            <thead><tr><th scope="col">Calendar</th><th scope="col">Read</th><th scope="col">Write</th></tr></thead>
+            <tbody>
+              {{range .Calendars}}
+              <tr>
+                <th scope="row">{{.Name}}</th>
+                <td><input type="checkbox" name="read" value="{{.Name}}" aria-label="Read {{.Name}}"{{if .Read}} checked{{end}}></td>
+                <td><input type="checkbox" name="write" value="{{.Name}}" aria-label="Write {{.Name}}"{{if .Write}} checked{{end}}></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="muted">No calendars are set up for you yet, so your assistant has no calendar tools.</p>
+          {{end}}
+        </section>
+        {{end}}
+
+        <div class="settings-actions">
+          <a class="button" href="/" hx-boost="true">Back to chat</a>
+          <button class="button primary" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+</body>
+</html>{{end}}

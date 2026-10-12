@@ -10,6 +10,7 @@ import (
 
 	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
@@ -59,7 +60,7 @@ func TestCalendarTools_OfferedOnlyToUsersWithACalendarDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewRegistry(CalendarTools(store)...)
+	r := NewRegistry().Provide(CalendarTools(store))
 	create := model.ToolCall{Id: "1", Function: model.FunctionCall{Name: "calendar_create", Arguments: `{"calendar":"assistant","summary":"Dentist","start":"2026-10-20T09:00"}`}}
 	dana := users.WithUser(context.Background(), users.User{Id: "1", Name: "dana"})
 	evil := users.WithUser(context.Background(), users.User{Id: "2", Name: ".."})
@@ -84,5 +85,49 @@ func TestCalendarTools_OfferedOnlyToUsersWithACalendarDirectory(t *testing.T) {
 	}
 	if files, _ := filepath.Glob(filepath.Join(root, "dana", "assistant", "*.ics")); len(files) != 1 {
 		t.Fatalf("dana's directory has %d events", len(files))
+	}
+}
+
+func TestCalendarTools_FollowTheUsersOwnChoiceOfCalendars(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"dana/home", "dana/work", "dana/assistant"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+	}
+	store, err := calendar.New(config.CalendarsConfig{Path: root, Read: []string{"work"}, Write: []string{"assistant"}, Timezone: "Europe/Brussels"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry().Provide(CalendarTools(store))
+	dana := users.WithUser(context.Background(), users.User{Id: "1", Name: "dana"})
+	names := func(ctx context.Context) string {
+		var out []string
+		for _, spec := range r.Specs(ctx) {
+			out = append(out, spec.Function.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := names(dana); got != "calendar_list,calendar_search,calendar_get,calendar_create,calendar_update,calendar_delete" {
+		t.Fatalf("defaults offer %s", got)
+	}
+
+	readOnly := settings.WithSettings(dana, settings.Settings{CustomCalendars: true, CalendarRead: []string{"home"}, CalendarWrite: []string{}})
+	if got := names(readOnly); got != "calendar_list,calendar_search,calendar_get" {
+		t.Fatalf("a read-only choice offers %s", got)
+	}
+	if params := string(r.Specs(readOnly)[0].Function.Parameters); !strings.Contains(params, `"home"`) || strings.Contains(params, `"work"`) {
+		t.Fatalf("the tool does not list the chosen calendars: %s", params)
+	}
+	create := model.ToolCall{Id: "1", Function: model.FunctionCall{Name: "calendar_create", Arguments: `{"calendar":"assistant","summary":"x","start":"2026-10-20T09:00"}`}}
+	if got := r.Call(readOnly, create); !strings.Contains(got.Content, "unknown tool") {
+		t.Fatalf("wrote with write access turned off: %s", got.Content)
+	}
+	list := model.ToolCall{Id: "2", Function: model.FunctionCall{Name: "calendar_list", Arguments: `{"calendars":["work"]}`}}
+	if got := r.Call(readOnly, list); !strings.Contains(got.Content, "no read access") {
+		t.Fatalf("read a calendar left out of the choice: %s", got.Content)
+	}
+
+	none := settings.WithSettings(dana, settings.Settings{CustomCalendars: true})
+	if got := names(none); got != "" {
+		t.Fatalf("choosing no calendars still offers %s", got)
 	}
 }

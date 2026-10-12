@@ -148,6 +148,15 @@ var migrations = []string{
 	);
 	CREATE INDEX sessions_user_id_idx ON sessions (user_id);
 	`,
+	`
+	CREATE TABLE user_settings (
+		user_id        UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		disabled_tools TEXT[] NOT NULL DEFAULT '{}',
+		calendar_read  TEXT[],
+		calendar_write TEXT[],
+		updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+	);
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

@@ -83,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /c/{id}", s.RequireUser(http.HandlerFunc(s.conversation)))
 	mux.Handle("POST /messages", s.RequireUser(http.HandlerFunc(s.send)))
 	mux.Handle("POST /c/{id}/title", s.RequireUser(http.HandlerFunc(s.rename)))
+	mux.Handle("GET /settings", s.RequireUser(http.HandlerFunc(s.settingsPage)))
+	mux.Handle("POST /settings", s.RequireUser(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("GET /turns/{id}/events", s.RequireUser(http.HandlerFunc(s.events)))
 	mux.Handle("POST /turns/{id}/cancel", s.RequireUser(http.HandlerFunc(s.cancel)))
 	return securityHeaders(s.sameOriginPosts(mux))

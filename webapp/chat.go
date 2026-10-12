@@ -12,17 +12,24 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/agent"
+	"git.estatecloud.org/radumaco/souvenir/calendar"
 	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/history"
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
+	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/model"
+	"git.estatecloud.org/radumaco/souvenir/tools"
 )
 
 type App struct {
-	Config  config.Config
-	History *history.DbClient
-	Agent   *agent.Agent
+	Config   config.Config
+	History  *history.DbClient
+	Agent    *agent.Agent
+	Settings *settings.Store
+	Tools    *tools.Registry
+	// Calendars is nil when calendars are off.
+	Calendars *calendar.Store
 }
 
 const (
