@@ -328,9 +328,19 @@ func TestLogout_NeedsTheSameOriginAndEndsTheSession(t *testing.T) {
 		t.Fatal("a refused logout ended the session")
 	}
 
+	opaque := httptest.NewRequest("POST", "/logout", nil)
+	opaque.AddCookie(session)
+	opaque.Header.Set("Origin", "null")
+	opaque.Header.Set("Sec-Fetch-Site", "cross-site")
+	if w := h.do(opaque); w.Code != http.StatusForbidden {
+		t.Fatalf("a cross-site logout with an opaque origin answered %d", w.Code)
+	}
+
 	same := httptest.NewRequest("POST", "/logout", nil)
 	same.AddCookie(session)
-	same.Header.Set("Origin", "http://souvenir.test")
+	// What a browser sends for a form post under a no-referrer policy.
+	same.Header.Set("Origin", "null")
+	same.Header.Set("Sec-Fetch-Site", "same-origin")
 	if w := h.do(same); w.Code != http.StatusSeeOther {
 		t.Fatalf("logout answered %d", w.Code)
 	}
