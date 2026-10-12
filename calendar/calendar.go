@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,6 +31,7 @@ type Event struct {
 	End         time.Time
 	AllDay      bool
 	Recurrence  string
+	Exceptions  []time.Time
 	Status      string
 }
 
@@ -40,6 +42,7 @@ type Changes struct {
 	Start       *string
 	End         *string
 	Recurrence  *string
+	Exceptions  *[]string
 }
 
 type Store struct {
@@ -50,8 +53,6 @@ type Store struct {
 	now      func() time.Time
 }
 
-// New opens the calendars under cfg.Path, in which environment variables
-// such as $HOME are expanded. Write access implies read access.
 func New(cfg config.CalendarsConfig) (*Store, error) {
 	root := os.ExpandEnv(cfg.Path)
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
@@ -113,8 +114,6 @@ func (s *Store) Between(names []string, from, to time.Time) ([]Event, error) {
 	return out, nil
 }
 
-// Search returns the first occurrence in [from, to) of each event whose
-// summary, description or location contains every word of the query.
 func (s *Store) Search(names []string, query string, from, to time.Time, limit int) ([]Event, error) {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
@@ -176,7 +175,6 @@ func (s *Store) Create(name string, c Changes) (Event, error) {
 	return s.toEvent(name, comp)
 }
 
-// Update changes an event in place; on a recurring event, the whole series.
 func (s *Store) Update(name, uid string, c Changes) (Event, error) {
 	if err := s.checkWrite(name); err != nil {
 		return Event{}, err
@@ -223,6 +221,7 @@ func (s *Store) load(name string) (map[string]*ical.Calendar, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
+		splitLists(cal)
 		s.fixZones(cal)
 		files[path] = cal
 	}
@@ -234,8 +233,6 @@ type located struct {
 	parent *ical.Calendar
 }
 
-// find returns the file holding an event and its main component, the one
-// that is not an override of a single occurrence.
 func (s *Store) find(name, uid string) (string, located, error) {
 	files, err := s.load(name)
 	if err != nil {
@@ -276,6 +273,7 @@ func (s *Store) toEvent(name string, comp *ical.Component) (Event, error) {
 		AllDay:     comp.Props.Get(ical.PropDateTimeStart).ValueType() == ical.ValueDate,
 		Recurrence: propValue(comp, ical.PropRecurrenceRule),
 	}
+	out.Exceptions = s.exceptionDays(comp)
 	out.Summary, _ = comp.Props.Text(ical.PropSummary)
 	out.Description, _ = comp.Props.Text(ical.PropDescription)
 	out.Location, _ = comp.Props.Text(ical.PropLocation)
@@ -286,8 +284,6 @@ func (s *Store) toEvent(name string, comp *ical.Component) (Event, error) {
 	return out, nil
 }
 
-// occurrences expands one file's events into those overlapping [from, to).
-// An occurrence moved by a RECURRENCE-ID override shows only as the override.
 func (s *Store) occurrences(name string, cal *ical.Calendar, from, to time.Time) []Event {
 	moved := map[int64]bool{}
 	for _, comp := range cal.Children {
@@ -333,9 +329,6 @@ func overlaps(ev Event, from, to time.Time) bool {
 
 var offsetName = regexp.MustCompile(`^(?:GMT|UTC)([+-])(\d{2})(\d{2})$`)
 
-// fixZones rewrites times whose TZID Go does not know, such as Apple's
-// "GMT+0200", to UTC, so go-ical can read them. Unknown names that are not
-// an offset are read in the store's timezone.
 func (s *Store) fixZones(cal *ical.Calendar) {
 	for _, comp := range cal.Children {
 		for _, name := range []string{ical.PropDateTimeStart, ical.PropDateTimeEnd, ical.PropRecurrenceID, ical.PropExceptionDates} {
@@ -374,9 +367,8 @@ func (s *Store) parseTime(v string) (t time.Time, allDay bool, err error) {
 	return t, false, fmt.Errorf("cannot read time %q, expected YYYY-MM-DD or YYYY-MM-DDTHH:MM", v)
 }
 
-// apply writes changes into an event. Moving the start without an end keeps
-// the event's length.
 func (s *Store) apply(comp *ical.Component, c Changes) error {
+	exceptions := s.exceptionDays(comp)
 	for name, v := range map[string]*string{ical.PropSummary: c.Summary, ical.PropDescription: c.Description, ical.PropLocation: c.Location} {
 		if v != nil && *v != "" {
 			comp.Props.SetText(name, *v)
@@ -402,6 +394,21 @@ func (s *Store) apply(comp *ical.Component, c Changes) error {
 			return err
 		}
 	}
+	if c.Exceptions != nil {
+		exceptions = nil
+		for _, v := range *c.Exceptions {
+			d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(v), s.loc)
+			if err != nil {
+				return fmt.Errorf("cannot read exception %q, expected YYYY-MM-DD", v)
+			}
+			exceptions = append(exceptions, d)
+		}
+	}
+	if c.Exceptions != nil || c.Recurrence != nil || c.Start != nil || c.End != nil {
+		if err := s.setExceptions(comp, exceptions, c.Exceptions != nil); err != nil {
+			return err
+		}
+	}
 	now := s.now().UTC()
 	seq, _ := strconv.Atoi(propValue(comp, ical.PropSequence))
 	if comp.Props.Get(ical.PropSequence) != nil {
@@ -411,6 +418,83 @@ func (s *Store) apply(comp *ical.Component, c Changes) error {
 	comp.Props.SetDateTime(ical.PropDateTimeStamp, now)
 	comp.Props.SetDateTime(ical.PropLastModified, now)
 	return nil
+}
+
+func (s *Store) exceptionDays(comp *ical.Component) []time.Time {
+	var days []time.Time
+	for _, p := range comp.Props[ical.PropExceptionDates] {
+		if t, err := p.DateTime(s.loc); err == nil {
+			t = t.In(s.loc)
+			days = append(days, time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, s.loc))
+		}
+	}
+	slices.SortFunc(days, time.Time.Compare)
+	return slices.CompactFunc(days, time.Time.Equal)
+}
+
+func (s *Store) setExceptions(comp *ical.Component, days []time.Time, strict bool) error {
+	comp.Props.Del(ical.PropExceptionDates)
+	if len(days) == 0 {
+		return nil
+	}
+	set, err := comp.RecurrenceSet(s.loc)
+	if err != nil {
+		return err
+	}
+	if set == nil {
+		if strict {
+			return errors.New("exceptions need a recurrence")
+		}
+		return nil
+	}
+	start, err := comp.Props.DateTime(ical.PropDateTimeStart, s.loc)
+	if err != nil {
+		return err
+	}
+	allDay := comp.Props.Get(ical.PropDateTimeStart).ValueType() == ical.ValueDate
+	for _, d := range days {
+		next := d.AddDate(0, 0, 1)
+		var occ *time.Time
+		for _, t := range set.Between(d, next, true) {
+			if t.Before(next) {
+				occ = &t
+				break
+			}
+		}
+		if occ == nil {
+			if strict {
+				return fmt.Errorf("%s is not an occurrence of this event", d.Format("2006-01-02"))
+			}
+			continue
+		}
+		p := ical.NewProp(ical.PropExceptionDates)
+		if allDay {
+			p.SetDate(occ.In(s.loc))
+		} else {
+			p.SetDateTime(occ.In(start.Location()))
+		}
+		comp.Props.Add(p)
+	}
+	return nil
+}
+
+func splitLists(cal *ical.Calendar) {
+	for _, comp := range cal.Children {
+		for _, name := range []string{ical.PropExceptionDates, ical.PropRecurrenceDates} {
+			var split []ical.Prop
+			for _, p := range comp.Props[name] {
+				for _, v := range strings.Split(p.Value, ",") {
+					q := p
+					q.Params = maps.Clone(p.Params)
+					q.Value = strings.TrimSpace(v)
+					split = append(split, q)
+				}
+			}
+			if len(split) > 0 {
+				comp.Props[name] = split
+			}
+		}
+	}
 }
 
 func (s *Store) applyTimes(comp *ical.Component, startArg, endArg *string) error {
@@ -458,7 +542,6 @@ func (s *Store) applyTimes(comp *ical.Component, startArg, endArg *string) error
 		comp.Props.SetDate(ical.PropDateTimeEnd, end)
 		return nil
 	}
-	// Without a configured timezone there is no TZID to write.
 	loc := s.loc
 	if loc == time.Local {
 		loc = time.UTC
@@ -468,7 +551,6 @@ func (s *Store) applyTimes(comp *ical.Component, startArg, endArg *string) error
 	return nil
 }
 
-// write replaces a file atomically, so vdirsyncer never syncs half of one.
 func write(path string, cal *ical.Calendar) error {
 	var buf bytes.Buffer
 	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {

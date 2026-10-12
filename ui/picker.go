@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -95,7 +96,7 @@ func (p picker) Update(msg tea.Msg) (picker, tea.Cmd) {
 		p.query.Blur()
 		p.allItems = toItems(msg.models)
 		p.layout()
-		return p, p.list.SetItems(p.allItems)
+		return p, p.list.SetItems(slices.Clone(p.allItems))
 
 	case pickerResultsMsg:
 		if msg.query != p.query.Value() {
@@ -130,7 +131,7 @@ func (p picker) Update(msg tea.Msg) (picker, tea.Cmd) {
 		case msg.String() == "esc" && p.query.Value() != "":
 			p.query.Reset()
 			p.layout()
-			return p, p.list.SetItems(p.allItems)
+			return p, p.list.SetItems(slices.Clone(p.allItems))
 		case msg.String() == "q" || msg.String() == "esc":
 			return p, func() tea.Msg { return pickerDismissMsg{} }
 		case p.searchable && key.Matches(msg, searchKey):
@@ -171,7 +172,7 @@ func (p picker) updateQuery(msg tea.KeyPressMsg) (picker, tea.Cmd) {
 		p.layout()
 		query := p.query.Value()
 		if query == "" {
-			return p, p.list.SetItems(p.allItems)
+			return p, p.list.SetItems(slices.Clone(p.allItems))
 		}
 		return p, func() tea.Msg { return pickerSearchMsg{query} }
 	}

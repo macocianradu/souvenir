@@ -156,8 +156,8 @@ binary.
 ### Calendar
 
 Not yet covered by the calendar tools: to-dos
-(`VTODO`), editing or deleting a single occurrence of a recurring event, and
-moving an event between calendars.
+(`VTODO`), changing a single occurrence of a recurring event (skipping one is
+covered by exceptions), and moving an event between calendars.
 
 ### Other frontends
 
@@ -252,7 +252,10 @@ files and leaves syncing to `vdirsyncer`. Only calendars named in `Read` or
 again: `Read` allows `calendar_list` (a day, Monday-to-Sunday week or month,
 recurring events expanded), `calendar_search` and `calendar_get`; `Write` also
 allows `calendar_create`, `calendar_update` and `calendar_delete`, and implies
-read access. With no `Read` or `Write` entries the tools are not offered.
+read access. A repeating event takes an iCalendar RRULE, which can end on
+a date (`UNTIL`) or after a number of occurrences (`COUNT`), and a list of
+dates it skips, written as `EXDATE`s at each occurrence's exact start. With no
+`Read` or `Write` entries the tools are not offered.
 The lists can be set from the environment as comma separated values
 (`SOUV__calendars__read=home,work`).
 

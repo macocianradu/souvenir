@@ -258,3 +258,99 @@ func TestNew_ExpandsEnvironmentAndRequiresTheDirectory(t *testing.T) {
 		t.Fatal("a missing directory was accepted")
 	}
 }
+
+func TestExceptions_SkipOccurrencesUntilTheEnd(t *testing.T) {
+	s := newStore(t, nil)
+	summary, start, rule := "Course", "2026-10-13T18:00", "FREQ=WEEKLY;BYDAY=TU;UNTIL=20261124T235959Z"
+	skip := []string{"2026-11-03", "2026-11-10"}
+	ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, Recurrence: &rule, Exceptions: &skip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(s.root, "assistant", ev.Uid+".ics"))
+	for _, want := range []string{"EXDATE;TZID=Europe/Brussels:20261103T180000", "EXDATE;TZID=Europe/Brussels:20261110T180000"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("missing %q in\n%s", want, data)
+		}
+	}
+	got, _ := s.Between([]string{"assistant"}, day(2026, 10, 1), day(2027, 1, 1))
+	want := "10-13 18:00 Course; 10-20 18:00 Course; 10-27 18:00 Course; 11-17 18:00 Course; 11-24 18:00 Course"
+	if summaries(got) != want {
+		t.Fatalf("got  %s\nwant %s", summaries(got), want)
+	}
+	if len(ev.Exceptions) != 2 || !ev.Exceptions[0].Equal(day(2026, 11, 3)) {
+		t.Fatalf("%v", ev.Exceptions)
+	}
+}
+
+func TestExceptions_FollowTheSeriesWhenItMoves(t *testing.T) {
+	s := newStore(t, nil)
+	summary, start, rule, skip := "Course", "2026-10-13T18:00", "FREQ=WEEKLY;BYDAY=TU", []string{"2026-11-03"}
+	ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, Recurrence: &rule, Exceptions: &skip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := "2026-10-13T19:30"
+	if _, err := s.Update("assistant", ev.Uid, Changes{Start: &later}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Between([]string{"assistant"}, day(2026, 10, 27), day(2026, 11, 11))
+	if summaries(got) != "10-27 19:30 Course; 11-10 19:30 Course" {
+		t.Fatal(summaries(got))
+	}
+
+	none := []string{}
+	if _, err := s.Update("assistant", ev.Uid, Changes{Exceptions: &none}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Between([]string{"assistant"}, day(2026, 11, 3), day(2026, 11, 4))
+	if summaries(got) != "11-03 19:30 Course" {
+		t.Fatal("clearing the exceptions did not bring the occurrence back:", summaries(got))
+	}
+}
+
+func TestExceptions_RejectDaysOutsideTheSeries(t *testing.T) {
+	s := newStore(t, nil)
+	summary, start, rule := "Course", "2026-10-13T18:00", "FREQ=WEEKLY;BYDAY=TU"
+	wednesday := []string{"2026-11-04"}
+	if _, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, Recurrence: &rule, Exceptions: &wednesday}); err == nil ||
+		!strings.Contains(err.Error(), "not an occurrence") {
+		t.Fatalf("got %v", err)
+	}
+	once := []string{"2026-10-13"}
+	if _, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, Exceptions: &once}); err == nil ||
+		!strings.Contains(err.Error(), "need a recurrence") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestExceptions_AllDaySeriesUseDates(t *testing.T) {
+	s := newStore(t, nil)
+	summary, start, rule, skip := "Bins", "2026-10-12", "FREQ=WEEKLY", []string{"2026-10-19"}
+	ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start, Recurrence: &rule, Exceptions: &skip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(s.root, "assistant", ev.Uid+".ics"))
+	if !strings.Contains(string(data), "EXDATE;VALUE=DATE:20261019") {
+		t.Fatalf("no date exception in\n%s", data)
+	}
+	got, _ := s.Between([]string{"assistant"}, day(2026, 10, 12), day(2026, 10, 27))
+	if summaries(got) != "10-12 00:00 Bins; 10-26 00:00 Bins" {
+		t.Fatal(summaries(got))
+	}
+}
+
+func TestBetween_ReadsCommaSeparatedExceptions(t *testing.T) {
+	listed := strings.Replace(weekly,
+		"EXDATE;TZID=Europe/Brussels:20261012T100000\nEXDATE;TZID=Europe/Brussels:20261019T100000",
+		"EXDATE;TZID=Europe/Brussels:20261012T100000,20261019T100000", 1)
+	s := newStore(t, map[string]string{"work/standup.ics": listed})
+	got, err := s.Between(nil, day(2026, 10, 1), day(2026, 11, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries(got) != "10-05 10:00 Standup; 10-27 09:00 Standup (moved); 11-02 10:00 Standup" {
+		t.Fatal(summaries(got))
+	}
+}

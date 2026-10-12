@@ -169,7 +169,8 @@ func CalendarTools(store *calendar.Store) []Tool {
 					"end": {"type": "string", "description": "Same format as start. For all-day events, the last day"},
 					"location": {"type": "string"},
 					"description": {"type": "string"},
-					"recurrence": {"type": "string", "description": "An iCalendar RRULE for repeating events, such as FREQ=WEEKLY;BYDAY=MO"}
+					"recurrence": {"type": "string", "description": "An iCalendar RRULE for repeating events, such as FREQ=WEEKLY;BYDAY=MO. End it with UNTIL=20261218T235959Z or after a number of occurrences with COUNT=10"},
+					"exceptions": {"type": "array", "items": {"type": "string"}, "description": "Dates (YYYY-MM-DD) of occurrences a repeating event skips, such as holidays"}
 				},
 				"required": ["calendar", "summary", "start"]
 			}`, writeEnum, timeHelp)),
@@ -203,7 +204,8 @@ func CalendarTools(store *calendar.Store) []Tool {
 					"end": {"type": "string", "description": "Same format as start. For all-day events, the last day"},
 					"location": {"type": "string"},
 					"description": {"type": "string"},
-					"recurrence": {"type": "string", "description": "An iCalendar RRULE, or an empty string to stop repeating"}
+					"recurrence": {"type": "string", "description": "An iCalendar RRULE, or an empty string to stop repeating"},
+					"exceptions": {"type": "array", "items": {"type": "string"}, "description": "Dates (YYYY-MM-DD) of occurrences to skip. Replaces the event's current list, so include the ones to keep; an empty list clears it"}
 				},
 				"required": ["calendar", "uid"]
 			}`, writeEnum, timeHelp)),
@@ -253,12 +255,13 @@ func CalendarTools(store *calendar.Store) []Tool {
 }
 
 type changeArgs struct {
-	Summary     *string `json:"summary"`
-	Start       *string `json:"start"`
-	End         *string `json:"end"`
-	Location    *string `json:"location"`
-	Description *string `json:"description"`
-	Recurrence  *string `json:"recurrence"`
+	Summary     *string   `json:"summary"`
+	Start       *string   `json:"start"`
+	End         *string   `json:"end"`
+	Location    *string   `json:"location"`
+	Description *string   `json:"description"`
+	Recurrence  *string   `json:"recurrence"`
+	Exceptions  *[]string `json:"exceptions"`
 }
 
 func (a changeArgs) changes() calendar.Changes {
@@ -269,6 +272,7 @@ func (a changeArgs) changes() calendar.Changes {
 		Start:       a.Start,
 		End:         a.End,
 		Recurrence:  a.Recurrence,
+		Exceptions:  a.Exceptions,
 	}
 }
 
@@ -349,6 +353,13 @@ func describeEvent(ev calendar.Event) string {
 	}
 	if ev.Recurrence != "" {
 		b.WriteString("\nRepeats: " + ev.Recurrence + " (from the first occurrence above)")
+	}
+	if len(ev.Exceptions) > 0 {
+		var days []string
+		for _, d := range ev.Exceptions {
+			days = append(days, d.Format("Mon 2006-01-02"))
+		}
+		b.WriteString("\nExcept: " + strings.Join(days, ", "))
 	}
 	if ev.Status != "" {
 		b.WriteString("\nStatus: " + strings.ToLower(ev.Status))
