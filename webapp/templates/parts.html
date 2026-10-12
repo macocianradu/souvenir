@@ -1,7 +1,10 @@
 {{define "sidebar"}}{{range .Groups}}
 <h2>{{.Label}}</h2>
 <ul>{{range .Items}}
-  <li><a href="/c/{{.Id}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}
+  <li{{if .Active}} class="active"{{end}}>
+    <a href="/c/{{.Id}}" title="{{.Name}}"{{if .Active}} aria-current="page"{{end}}>{{.Name}}</a>
+    <button type="button" class="rename-btn" data-rename="{{.Id}}" data-title="{{.Name}}" title="Rename" aria-label="Rename {{.Name}}">{{template "pencil"}}</button>
+  </li>{{end}}
 </ul>{{else}}
 <p class="empty">No conversations yet.</p>{{end}}{{end}}
 
@@ -41,8 +44,20 @@
 {{if .Cancelled}}<p class="note">Stopped.</p>{{end}}
 {{if .Err}}<p class="note error">{{.Err}}</p>{{end}}{{end}}
 
+{{define "pencil"}}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></svg>{{end}}
+
+{{define "heading"}}<div class="heading" id="chat-heading"{{if .Oob}} hx-swap-oob="true"{{end}}>
+  <h1 id="chat-title"{{if .Title}} title="{{.Title}}"{{end}}>{{or .Title "New chat"}}</h1>
+  {{if .Id}}<button type="button" class="rename-btn" data-rename="{{.Id}}" data-title="{{.Title}}" title="Rename" aria-label="Rename this conversation">{{template "pencil"}}</button>{{end}}
+</div>{{end}}
+
+{{define "renamed"}}{{template "sidebar" .Sidebar}}
+{{with .Heading}}{{template "heading" .}}
+<title>{{.Title}} · Souvenir</title>{{end}}{{end}}
+
 {{define "sent"}}{{template "message" .User}}
 {{template "live" .Live}}
 {{if .NewId}}<div id="landing" hx-swap-oob="delete"></div>
+{{template "heading" .Heading}}
 <input type="hidden" name="conversation" id="conversation-id" value="{{.NewId}}" hx-swap-oob="true">{{end}}
 <nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>{{end}}

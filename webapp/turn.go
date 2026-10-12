@@ -36,9 +36,9 @@ type turnState struct {
 	Reply         []model.Message
 	Err           string
 	Cancelled     bool
-	Done     bool
-	Title    string
-	Finished bool
+	Done          bool
+	Title         string
+	Finished      bool
 }
 
 func (t *turn) update(f func(*turnState)) {
@@ -110,6 +110,17 @@ func (ts *turns) running(userId, conversationId string) (*turn, bool) {
 	}
 	st, _ := t.snapshot()
 	return t, !st.Done
+}
+
+func (ts *turns) unfinished(userId, conversationId string) bool {
+	ts.mu.Lock()
+	t, ok := ts.byConversation[conversationId]
+	ts.mu.Unlock()
+	if !ok || t.userId != userId {
+		return false
+	}
+	st, _ := t.snapshot()
+	return !st.Finished
 }
 
 func (s *Server) runTurn(ctx context.Context, t *turn, client llm.ChatClient, conv model.Conversation) {

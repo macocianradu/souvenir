@@ -15,7 +15,7 @@ type Tool struct {
 	Description string
 	Parameters  json.RawMessage
 	Run         func(ctx context.Context, args json.RawMessage) (string, error)
-	Available func(ctx context.Context) bool
+	Available   func(ctx context.Context) bool
 }
 
 func (t Tool) available(ctx context.Context) bool {

@@ -145,6 +145,24 @@ func (cl DbClient) DeleteConversation(ctx context.Context, id string) error {
 	return nil
 }
 
+func (cl DbClient) SetTitle(ctx context.Context, id, title, source string) error {
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return err
+	}
+	tag, err := cl.pool.Exec(ctx,
+		`UPDATE conversations SET title = $1, title_source = NULLIF($2, '') WHERE id = $3 AND user_id = $4`,
+		title, source, id, userId)
+	if err != nil {
+		cl.logger.Error("Could not rename conversation", "id", id, "error", err)
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("conversation %s not found", id)
+	}
+	return nil
+}
+
 func (cl DbClient) SaveContextSummary(ctx context.Context, conversationId string, summary model.ContextSummary) error {
 	userId, err := users.Id(ctx)
 	if err != nil {

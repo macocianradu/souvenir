@@ -27,7 +27,7 @@
       <label for="drawer" class="icon-btn menu" title="Conversations">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 16h14"/></svg>
       </label>
-      <h1 id="chat-title">{{or .Conversation.Title "New chat"}}</h1>
+      {{template "heading" .Heading}}
       <label class="model">
         <span class="status-dot" aria-hidden="true"></span>
         <select name="model" form="composer" aria-label="Model">
@@ -56,9 +56,11 @@
 
     <div class="composer-wrap">
       <p id="status" class="status" role="status"></p>
-      <form id="composer" class="composer" hx-post="/messages" hx-target="#thread" hx-swap="beforeend">
+      <form id="composer" class="composer" hx-post="/messages" hx-target="#thread" hx-swap="beforeend" hx-encoding="multipart/form-data">
         <input type="hidden" name="conversation" id="conversation-id" value="{{.Conversation.Id}}">
-        <textarea name="content" rows="1" placeholder="Ask anything…" aria-label="Message" required maxlength="100000"></textarea>
+        <input type="file" name="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+        <div class="attachments" hidden></div>
+        <textarea name="content" rows="1" placeholder="Ask anything, or paste an image…" aria-label="Message" maxlength="100000"></textarea>
         {{if .CanThink}}
         <label class="think"><input type="checkbox" name="think"{{if .Think}} checked{{end}}><span>Think</span></label>
         {{end}}

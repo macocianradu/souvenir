@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /manifest.webmanifest", manifest)
 	mux.Handle("GET /c/{id}", s.RequireUser(http.HandlerFunc(s.conversation)))
 	mux.Handle("POST /messages", s.RequireUser(http.HandlerFunc(s.send)))
+	mux.Handle("POST /c/{id}/title", s.RequireUser(http.HandlerFunc(s.rename)))
 	mux.Handle("GET /turns/{id}/events", s.RequireUser(http.HandlerFunc(s.events)))
 	mux.Handle("POST /turns/{id}/cancel", s.RequireUser(http.HandlerFunc(s.cancel)))
 	return securityHeaders(s.sameOriginPosts(mux))
@@ -138,7 +139,7 @@ func (s *Server) RequireUser(next http.Handler) http.Handler {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")

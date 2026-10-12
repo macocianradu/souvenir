@@ -5,6 +5,71 @@ const streams = new Set();
 
 const $ = (selector, root = document) => root.querySelector(selector);
 
+// Images pasted or dropped into the composer wait there until the message is
+// sent. The limits match the server's.
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 10 << 20;
+let attached = [];
+
+function renderAttachments() {
+  const composer = $("#composer");
+  if (!composer) return;
+  const strip = $(".attachments", composer);
+  strip.querySelectorAll("img").forEach((img) => URL.revokeObjectURL(img.src));
+  strip.replaceChildren(...attached.map((file, i) => {
+    const figure = document.createElement("figure");
+    figure.className = "attachment";
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(file);
+    img.alt = "Attached image";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.dataset.remove = String(i);
+    remove.title = "Remove image";
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    figure.append(img, remove);
+    return figure;
+  }));
+  strip.hidden = attached.length === 0;
+  const files = new DataTransfer();
+  attached.forEach((file) => files.items.add(file));
+  $('input[name="images"]', composer).files = files.files;
+}
+
+function attach(files) {
+  const images = [...files].filter((f) => f.type.startsWith("image/"));
+  for (const file of images) {
+    if (attached.length >= MAX_IMAGES) {
+      setStatus(`A message can carry at most ${MAX_IMAGES} images.`);
+      break;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setStatus(`That image is over ${MAX_IMAGE_BYTES >> 20} MB.`);
+      continue;
+    }
+    attached.push(file);
+  }
+  renderAttachments();
+  return images.length > 0;
+}
+
+// Pasting an image attaches it. Clipboards holding text as well, such as a
+// copy from a document, paste the text as usual.
+document.addEventListener("paste", (e) => {
+  if (!e.target.matches?.("#composer textarea") || !e.clipboardData) return;
+  if (e.clipboardData.getData("text/plain")) return;
+  if (attach(e.clipboardData.files)) e.preventDefault();
+});
+
+document.addEventListener("dragover", (e) => {
+  if (e.target.closest?.("#composer") && e.dataTransfer?.types.includes("Files")) e.preventDefault();
+});
+
+document.addEventListener("drop", (e) => {
+  if (!e.target.closest?.("#composer") || !e.dataTransfer) return;
+  if (attach(e.dataTransfer.files)) e.preventDefault();
+});
+
 function setStatus(text) {
   const status = $("#status");
   if (status) status.textContent = text || "";
@@ -68,7 +133,12 @@ function stream(turn) {
   });
   source.addEventListener("title", (e) => {
     const title = $("#chat-title");
-    if (title) title.textContent = e.data;
+    if (title) {
+      title.textContent = e.data;
+      title.title = e.data;
+    }
+    const rename = $("#chat-heading .rename-btn");
+    if (rename) rename.dataset.title = e.data;
     document.title = e.data + " · Souvenir";
   });
   source.addEventListener("sidebar", (e) => {
@@ -99,6 +169,7 @@ document.addEventListener("htmx:beforeSwap", (e) => {
   if (e.detail.target !== document.body) return;
   streams.forEach((s) => s.close());
   streams.clear();
+  attached = [];
 });
 
 document.addEventListener("htmx:beforeRequest", (e) => {
@@ -121,6 +192,8 @@ document.addEventListener("htmx:afterRequest", (e) => {
   const input = $("textarea", composer);
   input.value = "";
   resize(input);
+  attached = [];
+  renderAttachments();
   keepBottom(() => {}, true);
 });
 
@@ -146,11 +219,82 @@ document.addEventListener("keydown", (e) => {
   if (!e.target.matches("#composer textarea")) return;
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    if (e.target.value.trim()) e.target.form.requestSubmit();
+    if (e.target.value.trim() || attached.length) e.target.form.requestSubmit();
   }
 });
 
+// Renaming happens in place: the pencil turns the title into a field, Enter
+// or leaving the field saves, and Escape cancels.
+function startRename(button) {
+  const holder = button.closest("li, .heading");
+  if (!holder || holder.classList.contains("editing")) return;
+  const before = (button.dataset.title || "").trim();
+  const form = document.createElement("form");
+  form.className = "rename-form";
+  form.setAttribute("hx-post", "/c/" + encodeURIComponent(button.dataset.rename) + "/title");
+  form.setAttribute("hx-target", "#conversations");
+  form.setAttribute("hx-swap", "innerHTML");
+  const input = document.createElement("input");
+  input.name = "title";
+  input.value = before;
+  input.maxLength = 200;
+  input.required = true;
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", "Title");
+  const active = document.createElement("input");
+  active.type = "hidden";
+  active.name = "active";
+  active.value = $("#conversation-id")?.value || "";
+  form.append(input, active);
+  holder.classList.add("editing");
+  holder.append(form);
+  htmx.process(form);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = () => {
+    done = true;
+    form.remove();
+    holder.classList.remove("editing");
+  };
+  const save = () => {
+    if (done) return;
+    const title = input.value.trim();
+    if (!title || title === before) return finish();
+    done = true;
+    form.requestSubmit();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      finish();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    }
+  });
+  input.addEventListener("blur", save);
+  // On success the new sidebar and heading replace the field.
+  form.addEventListener("htmx:afterRequest", (e) => {
+    if (!e.detail.successful) finish();
+  });
+}
+
 document.addEventListener("click", async (e) => {
+  const rename = e.target.closest("[data-rename]");
+  if (rename) {
+    startRename(rename);
+    return;
+  }
+
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    attached.splice(Number(remove.dataset.remove), 1);
+    renderAttachments();
+    return;
+  }
+
   const copy = e.target.closest("[data-copy]");
   if (copy) {
     const message = copy.closest("[data-raw]");

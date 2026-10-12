@@ -208,7 +208,18 @@ body.plain {
   color: var(--faint);
 }
 
-.conversations ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+/* One column that may shrink below its titles, so long ones get an ellipsis
+   instead of widening the list. */
+.conversations ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.conversations li { position: relative; min-width: 0; }
 
 .conversations a {
   display: block;
@@ -223,11 +234,64 @@ body.plain {
 
 .conversations a:hover { color: var(--text); }
 
-.conversations a.active {
+.conversations li.active a {
   color: var(--text);
   background: var(--bg);
   box-shadow: var(--inset);
 }
+
+/* Room for the rename button where it shows. */
+.conversations li:hover a,
+.conversations li:focus-within a,
+.conversations li.active a { padding-right: 42px; }
+
+.conversations .rename-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+.conversations li:hover .rename-btn,
+.conversations li:focus-within .rename-btn,
+.conversations li.active .rename-btn { opacity: 1; }
+
+.rename-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  flex: none;
+}
+
+.rename-btn svg { width: 14px; height: 14px; }
+.rename-btn:hover, .rename-btn:focus-visible { color: var(--accent); background: var(--bg); box-shadow: var(--raised-small); }
+
+.rename-form { margin: 0; flex: 1; min-width: 0; }
+
+.rename-form input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--inset);
+  color: var(--text);
+}
+
+.rename-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+.conversations li.editing a,
+.conversations li.editing .rename-btn,
+.heading.editing h1,
+.heading.editing .rename-btn { display: none; }
 
 .conversations .empty { margin: 18px 12px; color: var(--faint); font-size: 14px; }
 
@@ -274,8 +338,16 @@ body.plain {
   padding: 18px 24px 10px;
 }
 
-.topbar h1 {
+.heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 1;
+  min-width: 0;
+}
+
+.topbar h1 {
+  flex: 0 1 auto;
   min-width: 0;
   margin: 0;
   font-size: 16px;
@@ -532,6 +604,48 @@ body.plain {
   box-shadow: var(--raised);
 }
 
+.composer { flex-wrap: wrap; }
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-basis: 100%;
+  padding-top: 4px;
+}
+
+.attachments[hidden] { display: none; }
+
+.attachment {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  border-radius: 14px;
+  box-shadow: var(--raised-small);
+  overflow: hidden;
+}
+
+.attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.attachment button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 24, 32, 0.65);
+  color: #fff;
+  cursor: pointer;
+}
+
+.attachment button svg { width: 12px; height: 12px; }
+
 .composer textarea {
   flex: 1;
   min-width: 0;
@@ -612,7 +726,7 @@ body.plain {
   .main { height: 100dvh; border-radius: 0; box-shadow: none; }
   /* Added to the home screen, the page runs under the status bar. */
   .topbar { padding: max(14px, env(safe-area-inset-top)) 16px 8px; }
-  .topbar h1 { display: none; }
+  .heading { display: none; }
   .menu, .new-mobile { display: inline-grid; }
   .model { margin: 0 auto; max-width: 60%; }
   .thread { padding: 8px 16px 16px; }

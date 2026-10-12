@@ -3,6 +3,7 @@ package webapp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -76,6 +77,7 @@ type chatPage struct {
 	User         users.User
 	Initials     string
 	Conversation model.Conversation
+	Heading      headingView
 	Messages     []messageView
 	Live         *liveView
 	Sidebar      sidebarView
@@ -97,6 +99,7 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		User:         u,
 		Initials:     initials(u),
 		Conversation: conv,
+		Heading:      heading(conv),
 		Messages:     messageViews(conv.Messages),
 		Sidebar:      sidebar(list, conv.Id, time.Now().In(s.location)),
 		Models:       available,
@@ -135,16 +138,29 @@ type sentView struct {
 	User    messageView
 	Live    liveView
 	NewId   string
+	Heading headingView
 	Sidebar sidebarView
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u, _ := users.FromContext(ctx)
-	r.Body = http.MaxBytesReader(w, r.Body, maxMessage*4)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
+	if err := r.ParseMultipartForm(maxImageBytes); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+		fail(w, http.StatusRequestEntityTooLarge, "That message is too large to send.")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	images, err := formImages(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	content := strings.TrimSpace(r.FormValue("content"))
 	switch {
-	case content == "":
+	case content == "" && len(images) == 0:
 		fail(w, http.StatusBadRequest, "Write a message first.")
 		return
 	case len(content) > maxMessage:
@@ -165,7 +181,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	isNew := conv.Id == ""
-	conv.Messages = append(conv.Messages, model.Message{Role: "user", Content: content, Seq: len(conv.Messages) + 1})
+	conv.Messages = append(conv.Messages, model.Message{Role: "user", Content: content, Images: images, Seq: len(conv.Messages) + 1})
 	saved, err := s.app.History.SaveConversation(ctx, conv)
 	if err != nil {
 		s.logger.Error("Could not save the message", "error", err)
@@ -197,9 +213,63 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	}
 	if isNew {
 		view.NewId = conv.Id
+		view.Heading = headingView{Id: conv.Id, Oob: true}
 		w.Header().Set("HX-Push-Url", "/c/"+conv.Id)
 	}
 	s.render(w, http.StatusOK, "sent", view)
+}
+
+const maxTitle = 200
+
+// headingView is the open conversation's title above the chat.
+type headingView struct {
+	Id    string
+	Title string
+	Oob   bool
+}
+
+func heading(conv model.Conversation) headingView {
+	return headingView{Id: conv.Id, Title: conv.Title}
+}
+
+type renamedView struct {
+	Sidebar sidebarView
+	Heading *headingView
+}
+
+// rename sets a title the user chose; generated titles never replace it. It
+// answers with the sidebar, and with the heading when the renamed
+// conversation is the one open.
+func (s *Server) rename(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	u, _ := users.FromContext(ctx)
+	id := r.PathValue("id")
+	title := strings.Join(strings.Fields(r.FormValue("title")), " ")
+	switch {
+	case title == "":
+		fail(w, http.StatusBadRequest, "A title cannot be empty.")
+		return
+	case len([]rune(title)) > maxTitle:
+		fail(w, http.StatusBadRequest, fmt.Sprintf("A title can be at most %d characters.", maxTitle))
+		return
+	case s.turns.unfinished(u.Id, id):
+		fail(w, http.StatusConflict, "Wait for the reply to finish before renaming.")
+		return
+	}
+	if err := s.app.History.SetTitle(ctx, id, title, model.TitleSourceUser); err != nil {
+		fail(w, http.StatusNotFound, "This conversation does not exist any more.")
+		return
+	}
+	active := r.FormValue("active")
+	list, err := s.app.History.GetConversations(ctx)
+	if err != nil {
+		s.logger.Error("Could not list conversations", "error", err)
+	}
+	view := renamedView{Sidebar: sidebar(list, active, time.Now().In(s.location))}
+	if active == id {
+		view.Heading = &headingView{Id: id, Title: title, Oob: true}
+	}
+	s.render(w, http.StatusOK, "renamed", view)
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {

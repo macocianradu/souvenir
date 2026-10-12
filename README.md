@@ -188,8 +188,7 @@ covered by exceptions), and moving an event between calendars.
 
 ### On the web
 
-Not on the web yet, though the TUI has them: pasting images, renaming and
-deleting conversations, searching history, and reviewing memories. Also still
+Not on the web yet, though the TUI has them: deleting conversations, searching history, and reviewing memories. Also still
 to come: regenerating a reply, and trusting the client address from the proxy's
 header only when the request came through it.
 
@@ -330,6 +329,20 @@ opening the conversation again picks the stream back up. One reply runs per
 conversation at a time. When it is finished the conversation is named and, past
 its budget, summarized, as in the TUI. The model picker lists the provider's
 models and remembers the choice.
+
+Long titles end in an ellipsis, with the full title as a tooltip. The pencil
+next to a conversation in the sidebar, or next to the open one's title, renames
+it in place: Enter or leaving the field saves, Escape cancels. A title you set
+is never replaced by a generated one, and renaming does not move the
+conversation up the list. It waits until a reply has finished, since the reply
+may still name the conversation.
+
+Images pasted into the message box, or dropped on it, are attached to the
+message: up to four, of at most 10 MB each, shown as thumbnails until sent.
+Pasting a clipboard that also holds text, such as a copy from a document,
+pastes the text instead. The server decides each image's type from its bytes
+and accepts only PNG, JPEG, WebP and GIF. Images are saved with the message, as
+in the TUI, and need a chat model that reads them.
 
 ### Web sign-in
 

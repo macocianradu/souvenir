@@ -1,12 +1,15 @@
 package webapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strings"
@@ -15,7 +18,6 @@ import (
 	"time"
 
 	"git.estatecloud.org/radumaco/souvenir/db/users"
-	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/model"
 )
 
@@ -25,6 +27,8 @@ type fakeLLM struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	models []string
+	// streamed holds the body of each streamed request.
+	streamed []string
 }
 
 func newFakeLLM(t *testing.T) *fakeLLM {
@@ -34,16 +38,23 @@ func newFakeLLM(t *testing.T) *fakeLLM {
 		fmt.Fprint(w, `{"data":[{"id":"small"},{"id":"large"}]}`)
 	})
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		var req llm.ChatRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		body, _ := io.ReadAll(r.Body)
+		// Content is a string, or a list of parts when images are attached.
+		var req struct {
+			Model    string
+			Stream   bool
+			Messages []struct{ Content json.RawMessage }
+		}
+		json.Unmarshal(body, &req)
 		if !req.Stream {
 			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"{\"title\":\"Greeting\",\"summary\":\"S\"}"}}]}`)
 			return
 		}
 		f.mu.Lock()
 		f.models = append(f.models, req.Model)
+		f.streamed = append(f.streamed, string(body))
 		f.mu.Unlock()
-		last := req.Messages[len(req.Messages)-1].Content
+		last := string(req.Messages[len(req.Messages)-1].Content)
 		chunk := func(field, text string) {
 			data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{field: text}}}})
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -171,10 +182,10 @@ func TestChat_SendStreamsSavesAndNamesTheConversation(t *testing.T) {
 	}
 
 	page := h.get(dana, pushed).Body.String()
-	if !strings.Contains(page, "<strong>there</strong>") || !strings.Contains(page, `<h1 id="chat-title">Greeting</h1>`) {
+	if !strings.Contains(page, "<strong>there</strong>") || !strings.Contains(page, `<h1 id="chat-title" title="Greeting">Greeting</h1>`) {
 		t.Fatalf("the conversation page does not show the reply:\n%s", page)
 	}
-	if !strings.Contains(page, `class="active" aria-current="page">Greeting</a>`) {
+	if !strings.Contains(page, `<li class="active">`) || !strings.Contains(page, `title="Greeting" aria-current="page">Greeting</a>`) {
 		t.Fatal("the sidebar does not mark the open conversation")
 	}
 }
@@ -363,4 +374,116 @@ func TestManifest_MakesTheSiteInstallable(t *testing.T) {
 	if a := h.get(nil, "/static/apple-touch-icon.png"); a.Code != http.StatusOK {
 		t.Errorf("apple touch icon: %d", a.Code)
 	}
+}
+
+// png is a 1x1 PNG.
+var png = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
+
+func (h *harness) postImages(session *http.Cookie, content string, images map[string][]byte) *httptest.ResponseRecorder {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	mw.WriteField("content", content)
+	for name, data := range images {
+		part, _ := mw.CreatePart(textproto.MIMEHeader{
+			"Content-Disposition": {`form-data; name="images"; filename="` + name + `"`},
+			"Content-Type":        {"image/png"},
+		})
+		part.Write(data)
+	}
+	mw.Close()
+	r := httptest.NewRequest("POST", "/messages", &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	r.Header.Set("Origin", "http://souvenir.test")
+	r.AddCookie(session)
+	return h.do(r)
+}
+
+func TestChat_PastedImagesReachTheModelAndAreSaved(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+
+	w := h.postImages(dana, "", map[string][]byte{"shot.png": png})
+	if w.Code != http.StatusOK {
+		t.Fatalf("an image-only message answered %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), `<img src="data:image/png;base64,`) {
+		t.Fatal("the sent message does not show the image")
+	}
+	h.get(dana, "/turns/"+turnId(t, w.Body.String())+"/events")
+	h.llm.mu.Lock()
+	sent := h.llm.streamed[len(h.llm.streamed)-1]
+	h.llm.mu.Unlock()
+	if !strings.Contains(sent, `"image_url":{"url":"data:image/png;base64,`) {
+		t.Fatalf("the model did not get the image: %s", sent)
+	}
+	convId := strings.TrimPrefix(w.Header().Get("HX-Push-Url"), "/c/")
+	conv, err := h.history.GetConversation(users.WithUser(context.Background(), h.user(dana)), convId)
+	if err != nil || len(conv.Messages) == 0 || len(conv.Messages[0].Images) != 1 || !bytes.Equal(conv.Messages[0].Images[0].Data, png) {
+		t.Fatalf("the image was not saved: %v", err)
+	}
+	if !strings.Contains(h.get(dana, "/c/"+convId).Body.String(), `<img src="data:image/png;base64,`) {
+		t.Fatal("reopening the conversation does not show the image")
+	}
+
+	if w := h.postImages(dana, "look", map[string][]byte{"fake.png": []byte("<script>alert(1)</script>")}); w.Code != http.StatusBadRequest {
+		t.Errorf("a non-image claiming to be a PNG answered %d", w.Code)
+	}
+	many := map[string][]byte{}
+	for i := range maxImages + 1 {
+		many[fmt.Sprint(i, ".png")] = png
+	}
+	if w := h.postImages(dana, "look", many); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "at most") {
+		t.Errorf("too many images answered %d", w.Code)
+	}
+}
+
+func TestRename_SetsTheUsersTitleInPlace(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	older, _ := h.history.SaveConversation(ctx, model.Conversation{Title: "Older", Messages: []model.Message{{Role: "user", Content: "a", Seq: 1}}})
+	newer, _ := h.history.SaveConversation(ctx, model.Conversation{Title: "Newer", Messages: []model.Message{{Role: "user", Content: "b", Seq: 1}}})
+	long := strings.Repeat("A rather long title ", 8)
+
+	w := h.post(dana, "/c/"+older.Id+"/title", url.Values{"title": {"  " + long + "  "}, "active": {older.Id}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	clean := strings.TrimSpace(long)
+	if !strings.Contains(body, `title="`+clean+`"`) {
+		t.Error("the sidebar does not carry the full title as a tooltip")
+	}
+	if !strings.Contains(body, `id="chat-heading" hx-swap-oob="true"`) || !strings.Contains(body, "<title>"+clean+" · Souvenir</title>") {
+		t.Errorf("the open conversation's heading is not updated:\n%s", body)
+	}
+	if strings.Index(body, "Newer") > strings.Index(body, clean) {
+		t.Error("renaming moved the conversation up the list")
+	}
+	conv, _ := h.history.GetConversation(ctx, older.Id)
+	if conv.Title != clean || conv.TitleSource != model.TitleSourceUser {
+		t.Fatalf("saved %q from %q", conv.Title, conv.TitleSource)
+	}
+
+	w = h.post(dana, "/c/"+newer.Id+"/title", url.Values{"title": {"Renamed elsewhere"}, "active": {older.Id}})
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "chat-heading") {
+		t.Errorf("renaming another conversation touched the open one's heading: %d", w.Code)
+	}
+
+	for name, title := range map[string]string{"empty": "   ", "too long": strings.Repeat("x", maxTitle+1)} {
+		if w := h.post(dana, "/c/"+older.Id+"/title", url.Values{"title": {title}}); w.Code != http.StatusBadRequest {
+			t.Errorf("%s title answered %d", name, w.Code)
+		}
+	}
+	if w := h.post(h.as("erin"), "/c/"+older.Id+"/title", url.Values{"title": {"Mine"}}); w.Code != http.StatusNotFound {
+		t.Errorf("erin renamed dana's conversation: %d", w.Code)
+	}
+
+	sent := h.post(dana, "/messages", url.Values{"content": {"please wait"}, "conversation": {older.Id}})
+	id := turnId(t, sent.Body.String())
+	h.waitFor(dana, id, func(st turnState) bool { return st.Content == "Partial" })
+	if w := h.post(dana, "/c/"+older.Id+"/title", url.Values{"title": {"During"}}); w.Code != http.StatusConflict {
+		t.Errorf("renaming during a reply answered %d", w.Code)
+	}
+	h.post(dana, "/turns/"+id+"/cancel", nil)
 }
