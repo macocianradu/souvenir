@@ -203,10 +203,27 @@ function openAtBottom() {
   box.addEventListener("scroll", () => {
     atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   }, { passive: true });
-  new ResizeObserver(() => {
+  const pin = new ResizeObserver(() => {
     if (atBottom) box.scrollTop = box.scrollHeight;
-  }).observe($(".thread", box));
+  });
+  pin.observe($(".thread", box));
+  pin.observe(box);
   box.scrollTop = box.scrollHeight;
+}
+
+const viewport = window.visualViewport;
+if (viewport) {
+  const fit = () => {
+    if (Math.abs(viewport.scale - 1) > 0.01) return;
+    const root = document.documentElement;
+    const keyboard = window.innerHeight - viewport.height > 120;
+    root.classList.toggle("keyboard", keyboard);
+    if (keyboard) root.style.setProperty("--viewport-height", viewport.height + "px");
+    else root.style.removeProperty("--viewport-height");
+    if (window.scrollY) window.scrollTo(0, 0);
+  };
+  viewport.addEventListener("resize", fit);
+  viewport.addEventListener("scroll", fit);
 }
 
 document.addEventListener("DOMContentLoaded", openAtBottom);
