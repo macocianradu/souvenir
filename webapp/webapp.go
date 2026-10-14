@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /c/{id}", s.RequireUser(http.HandlerFunc(s.conversation)))
 	mux.Handle("POST /messages", s.RequireUser(http.HandlerFunc(s.send)))
 	mux.Handle("POST /c/{id}/title", s.RequireUser(http.HandlerFunc(s.rename)))
+	mux.Handle("POST /c/{id}/delete", s.RequireUser(http.HandlerFunc(s.deleteConversation)))
 	mux.Handle("GET /settings", s.RequireUser(http.HandlerFunc(s.settingsHome)))
 	mux.Handle("GET /settings/{tab}", s.RequireUser(http.HandlerFunc(s.settingsPage)))
 	mux.Handle("POST /settings/tools", s.RequireUser(http.HandlerFunc(s.saveTools)))

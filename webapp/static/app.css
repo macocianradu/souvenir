@@ -240,22 +240,22 @@ body.plain {
   box-shadow: var(--inset);
 }
 
-/* Room for the rename button where it shows. */
 .conversations li:hover a,
 .conversations li:focus-within a,
-.conversations li.active a { padding-right: 42px; }
+.conversations li.active a { padding-right: 70px; }
 
-.conversations .rename-btn {
+.conversations .row-actions {
   position: absolute;
   top: 50%;
   right: 8px;
+  display: flex;
   transform: translateY(-50%);
   opacity: 0;
 }
 
-.conversations li:hover .rename-btn,
-.conversations li:focus-within .rename-btn,
-.conversations li.active .rename-btn { opacity: 1; }
+.conversations li:hover .row-actions,
+.conversations li:focus-within .row-actions,
+.conversations li.active .row-actions { opacity: 1; }
 
 .rename-btn {
   display: inline-grid;
@@ -273,6 +273,7 @@ body.plain {
 
 .rename-btn svg { width: 14px; height: 14px; }
 .rename-btn:hover, .rename-btn:focus-visible { color: var(--accent); background: var(--bg); box-shadow: var(--raised-small); }
+.delete-btn:hover, .delete-btn:focus-visible { color: var(--danger); }
 
 .rename-form { margin: 0; flex: 1; min-width: 0; }
 
@@ -289,7 +290,7 @@ body.plain {
 .rename-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 
 .conversations li.editing a,
-.conversations li.editing .rename-btn,
+.conversations li.editing .row-actions,
 .heading.editing h1,
 .heading.editing .rename-btn { display: none; }
 

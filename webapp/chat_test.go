@@ -528,3 +528,46 @@ func TestChat_MessagesShowWhenTheyWereSent(t *testing.T) {
 		t.Fatalf("the reopened conversation shows %d times, want 2", n)
 	}
 }
+
+func TestDelete_RemovesTheConversationButNotWhileReplying(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	open, _ := h.history.SaveConversation(ctx, model.Conversation{Title: "Open one", Messages: []model.Message{{Role: "user", Content: "a", Seq: 1}}})
+	other, _ := h.history.SaveConversation(ctx, model.Conversation{Title: "Other one", Messages: []model.Message{{Role: "user", Content: "b", Seq: 1}}})
+
+	if page := h.get(dana, "/c/"+open.Id).Body.String(); !strings.Contains(page, `hx-post="/c/`+open.Id+`/delete"`) {
+		t.Fatal("the page offers no delete button")
+	}
+	if w := h.post(h.as("erin"), "/c/"+open.Id+"/delete", nil); w.Code != http.StatusNotFound {
+		t.Errorf("erin deleted dana's conversation: %d", w.Code)
+	}
+
+	w := h.post(dana, "/c/"+other.Id+"/delete", url.Values{"conversation": {open.Id}})
+	if w.Code != http.StatusOK || w.Header().Get("HX-Location") != "" {
+		t.Fatalf("deleting another conversation: %d %q", w.Code, w.Header().Get("HX-Location"))
+	}
+	if body := w.Body.String(); strings.Contains(body, "Other one") || !strings.Contains(body, "Open one") {
+		t.Errorf("the sidebar is not updated:\n%s", body)
+	}
+	if _, err := h.history.GetConversation(ctx, other.Id); err == nil {
+		t.Error("the conversation is still saved")
+	}
+
+	sent := h.post(dana, "/messages", url.Values{"content": {"please wait"}, "conversation": {open.Id}})
+	id := turnId(t, sent.Body.String())
+	h.waitFor(dana, id, func(st turnState) bool { return st.Content == "Partial" })
+	if w := h.post(dana, "/c/"+open.Id+"/delete", url.Values{"conversation": {open.Id}}); w.Code != http.StatusConflict {
+		t.Errorf("deleting during a reply answered %d", w.Code)
+	}
+	h.post(dana, "/turns/"+id+"/cancel", nil)
+	h.waitFor(dana, id, func(st turnState) bool { return st.Finished })
+
+	w = h.post(dana, "/c/"+open.Id+"/delete", url.Values{"conversation": {open.Id}})
+	if w.Code != http.StatusOK || w.Header().Get("HX-Location") != "/" {
+		t.Errorf("deleting the open conversation did not leave it: %d %q", w.Code, w.Header().Get("HX-Location"))
+	}
+	if w := h.get(dana, "/c/"+open.Id); w.Code != http.StatusNotFound {
+		t.Errorf("the deleted conversation still opens: %d", w.Code)
+	}
+}

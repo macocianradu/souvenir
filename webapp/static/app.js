@@ -1,12 +1,9 @@
 "use strict";
 
-// Streams of replies being written, closed when the page is swapped away.
 const streams = new Set();
 
 const $ = (selector, root = document) => root.querySelector(selector);
 
-// Images pasted or dropped into the composer wait there until the message is
-// sent. The limits match the server's.
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 10 << 20;
 let attached = [];
@@ -53,8 +50,6 @@ function attach(files) {
   return images.length > 0;
 }
 
-// Pasting an image attaches it. Clipboards holding text as well, such as a
-// copy from a document, paste the text as usual.
 document.addEventListener("paste", (e) => {
   if (!e.target.matches?.("#composer textarea") || !e.clipboardData) return;
   if (e.clipboardData.getData("text/plain")) return;
@@ -70,9 +65,6 @@ document.addEventListener("drop", (e) => {
   if (attach(e.dataTransfer.files)) e.preventDefault();
 });
 
-// Message times are sent in the server's zone; these labels redo them in the
-// reader's own zone and language, with the server's rules: the time alone
-// today, then yesterday, the weekday within a week, and the date.
 const clock = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
 const dayMonth = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
@@ -108,7 +100,6 @@ setInterval(() => localizeStamps(document), 60_000);
 
 let statusTimer;
 
-// setStatus shows a problem, or with ok a passing confirmation.
 function setStatus(text, ok) {
   const status = $("#status");
   if (!status) return;
@@ -127,8 +118,6 @@ function setBusy(turnId) {
   $(".stop", composer).hidden = !turnId;
 }
 
-// keepBottom runs change and keeps the view pinned to the newest message,
-// unless the reader had scrolled up.
 function keepBottom(change, force) {
   const box = $("#messages");
   if (!box) return change();
@@ -150,8 +139,6 @@ function stream(turn) {
     setBusy(null);
   };
 
-  // A thinking panel the reader opened or closed stays that way while the
-  // reply is redrawn.
   turn.addEventListener("toggle", (e) => {
     if (e.target.matches(".thinking")) turn.dataset.thinking = e.target.open ? "open" : "closed";
   }, true);
@@ -183,6 +170,11 @@ function stream(turn) {
     }
     const rename = $("#chat-heading .rename-btn");
     if (rename) rename.dataset.value = e.data;
+    const remove = $("#chat-heading .delete-btn");
+    if (remove) {
+      remove.setAttribute("hx-confirm", `Delete “${e.data}” permanently? Its messages are removed and cannot be recovered.`);
+      remove.setAttribute("aria-label", "Delete " + e.data);
+    }
     document.title = e.data + " · Souvenir";
   });
   source.addEventListener("sidebar", (e) => {
@@ -193,7 +185,6 @@ function stream(turn) {
   });
   source.addEventListener("end", close);
   source.addEventListener("error", () => {
-    // The browser retries a dropped stream by itself; a closed one is over.
     if (source.readyState === EventSource.CLOSED) close();
   });
 }
@@ -204,12 +195,26 @@ document.addEventListener("htmx:load", (e) => {
   if (e.detail.elt.matches?.("[data-stream]")) stream(e.detail.elt);
 });
 
-document.addEventListener("DOMContentLoaded", () => {
+function openAtBottom() {
   const box = $("#messages");
-  if (box) box.scrollTop = box.scrollHeight;
+  if (!box || box.dataset.pinned) return;
+  box.dataset.pinned = "1";
+  let atBottom = true;
+  box.addEventListener("scroll", () => {
+    atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  }, { passive: true });
+  new ResizeObserver(() => {
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }).observe($(".thread", box));
+  box.scrollTop = box.scrollHeight;
+}
+
+document.addEventListener("DOMContentLoaded", openAtBottom);
+
+document.addEventListener("htmx:afterSettle", (e) => {
+  if (e.detail.target === document.body) openAtBottom();
 });
 
-// Leaving the page for another conversation stops listening to this one.
 document.addEventListener("htmx:beforeSwap", (e) => {
   if (e.detail.target !== document.body) return;
   streams.forEach((s) => s.close());
@@ -259,7 +264,6 @@ document.addEventListener("input", (e) => {
   if (e.target.matches("#composer textarea")) resize(e.target);
 });
 
-// Enter sends, Shift+Enter starts a new line.
 document.addEventListener("keydown", (e) => {
   if (!e.target.matches("#composer textarea")) return;
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -268,10 +272,6 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// Editing happens in place: the pencil turns a title or a memory into a
-// field, Enter or leaving the field saves, and Escape cancels. The button
-// says where to post (data-edit), the field's name (data-field) and what the
-// answer replaces (data-target, data-swap).
 function startEdit(button) {
   const holder = button.closest("li, .heading, .memory");
   if (!holder || holder.classList.contains("editing")) return;
@@ -365,21 +365,18 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
-  // Picking a conversation on a phone closes the drawer.
   if (e.target.closest(".conversations a, .new-chat")) {
     const drawer = $("#drawer");
     if (drawer) drawer.checked = false;
   }
 });
 
-// Settings save as they change; the memory box empties once added.
 document.addEventListener("htmx:afterRequest", (e) => {
   if (!e.detail.successful) return;
   if (e.detail.elt.matches?.(".toggles")) setStatus("Saved.", true);
   if (e.detail.elt.matches?.(".add-memory")) e.detail.elt.reset();
 });
 
-// Writing a calendar includes reading it.
 document.addEventListener("change", (e) => {
   const box = e.target;
   if (!box.matches?.(".calendars input")) return;

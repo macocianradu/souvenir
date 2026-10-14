@@ -2,6 +2,7 @@ package webapp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -237,6 +238,10 @@ type headingView struct {
 	Oob   bool
 }
 
+func (h headingView) Name() string {
+	return cmp.Or(h.Title, "this conversation")
+}
+
 func heading(conv model.Conversation) headingView {
 	return headingView{Id: conv.Id, Title: conv.Title}
 }
@@ -279,6 +284,31 @@ func (s *Server) rename(w http.ResponseWriter, r *http.Request) {
 		view.Heading = &headingView{Id: id, Title: title, Oob: true}
 	}
 	s.render(w, http.StatusOK, "renamed", view)
+}
+
+func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	u, _ := users.FromContext(ctx)
+	id := r.PathValue("id")
+	if s.turns.unfinished(u.Id, id) {
+		fail(w, http.StatusConflict, "Wait for the reply to finish before deleting.")
+		return
+	}
+	if err := s.app.History.DeleteConversation(ctx, id); err != nil {
+		fail(w, http.StatusNotFound, "This conversation does not exist any more.")
+		return
+	}
+	active := r.FormValue("conversation")
+	if active == id {
+		w.Header().Set("HX-Location", "/")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	list, err := s.app.History.GetConversations(ctx)
+	if err != nil {
+		s.logger.Error("Could not list conversations", "error", err)
+	}
+	s.render(w, http.StatusOK, "sidebar", sidebar(list, active, time.Now().In(s.location)))
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {

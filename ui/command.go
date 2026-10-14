@@ -110,7 +110,7 @@ func (m uiModel) buildCommands() []command {
 		},
 		{
 			name:        "history",
-			description: "Open conversation history",
+			description: "Open, search and delete past conversations",
 			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
 				m.logger.Debug("Received history call")
 				if !m.canSwitchConversation() {
