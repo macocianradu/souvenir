@@ -27,6 +27,8 @@ type Config struct {
 	Embedding EmbeddingConfig
 	Ssh       SshConfig
 	Calendars CalendarsConfig
+	News      NewsConfig
+	Monitor   MonitorConfig
 	WebSearch WebSearchConfig
 	Fetch     FetchConfig
 	Web       WebConfig
@@ -68,6 +70,28 @@ type CalendarsConfig struct {
 
 func (c CalendarsConfig) Enabled() bool {
 	return c.Path != "" && len(c.Read)+len(c.Write) > 0
+}
+
+type NewsConfig struct {
+	Url     string
+	Token   string
+	Users   []string
+	Timeout int
+}
+
+func (c NewsConfig) Enabled() bool { return c.Url != "" }
+
+type MonitorConfig struct {
+	AlertmanagerUrl string
+	VmalertUrls     []string
+	MetricsUrl      string
+	LogsUrl         string
+	Users           []string
+	Timeout         int
+}
+
+func (c MonitorConfig) Enabled() bool {
+	return c.AlertmanagerUrl != "" || len(c.VmalertUrls) > 0 || c.MetricsUrl != "" || c.LogsUrl != ""
 }
 
 type SshConfig struct {
@@ -232,6 +256,8 @@ func defaultConfig() *Config {
 			AuthorizedKeys: "authorized_keys",
 		},
 		CalendarsConfig{},
+		NewsConfig{Timeout: 10000},
+		MonitorConfig{Timeout: 15000},
 		WebSearchConfig{Provider: "searxng", Timeout: 10000},
 		FetchConfig{Enabled: true, Timeout: 20000, MaxBytes: 5 << 20, MaxChars: 20000},
 		WebConfig{SessionDays: 30},
@@ -372,6 +398,12 @@ func (cfg Config) validate() error {
 	if err := cfg.Web.validate(cfg.Oidc); err != nil {
 		return err
 	}
+	if err := cfg.News.validate(); err != nil {
+		return err
+	}
+	if err := cfg.Monitor.validate(); err != nil {
+		return err
+	}
 	return cfg.Calendars.validate()
 }
 
@@ -407,6 +439,58 @@ func (c CalendarsConfig) validate() error {
 		if _, err := time.LoadLocation(c.Timezone); err != nil {
 			return fmt.Errorf("Calendars.Timezone: %w", err)
 		}
+	}
+	return nil
+}
+
+func (c NewsConfig) validate() error {
+	if !c.Enabled() {
+		return nil
+	}
+	if err := checkUrl("News.Url", c.Url); err != nil {
+		return err
+	}
+	if c.Token == "" {
+		return errors.New("News.Token must be a Miniflux API key")
+	}
+	if len(c.Users) == 0 {
+		return errors.New("News.Users must name the users who may read the feeds")
+	}
+	if c.Timeout <= 0 {
+		return errors.New("News.Timeout must be positive")
+	}
+	return nil
+}
+
+func (c MonitorConfig) validate() error {
+	if !c.Enabled() {
+		return nil
+	}
+	for name, u := range map[string]string{"Monitor.AlertmanagerUrl": c.AlertmanagerUrl, "Monitor.MetricsUrl": c.MetricsUrl, "Monitor.LogsUrl": c.LogsUrl} {
+		if u == "" {
+			continue
+		}
+		if err := checkUrl(name, u); err != nil {
+			return err
+		}
+	}
+	for _, u := range c.VmalertUrls {
+		if err := checkUrl("Monitor.VmalertUrls", u); err != nil {
+			return err
+		}
+	}
+	if len(c.Users) == 0 {
+		return errors.New("Monitor.Users must name the users who may query the monitoring stack")
+	}
+	if c.Timeout <= 0 {
+		return errors.New("Monitor.Timeout must be positive")
+	}
+	return nil
+}
+
+func checkUrl(name, raw string) error {
+	if u, err := url.Parse(raw); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("%s must be an http or https address, like http://miniflux:8080", name)
 	}
 	return nil
 }

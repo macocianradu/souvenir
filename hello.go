@@ -25,6 +25,8 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
+	"git.estatecloud.org/radumaco/souvenir/monitor"
+	"git.estatecloud.org/radumaco/souvenir/news"
 	"git.estatecloud.org/radumaco/souvenir/tools"
 	ui "git.estatecloud.org/radumaco/souvenir/ui"
 	"git.estatecloud.org/radumaco/souvenir/web"
@@ -103,6 +105,12 @@ func main() {
 	registry := tools.NewRegistry(toolset...)
 	if calendars != nil {
 		registry.Provide(tools.CalendarTools(calendars))
+	}
+	if config.News.Enabled() {
+		registry.Provide(tools.NewsTools(news.New(config.News), config.News.Users))
+	}
+	if config.Monitor.Enabled() {
+		registry.Provide(tools.MonitorTools(monitor.New(config.Monitor), config.Monitor.Users))
 	}
 	userSettings := settings.NewStore(pool)
 	location := time.Local

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/db/settings"
@@ -17,6 +18,8 @@ type Tool struct {
 	Description string
 	Parameters  json.RawMessage
 	Run         func(ctx context.Context, args json.RawMessage) (string, error)
+	Untrusted   bool
+	Sensitive   bool
 }
 
 func (t Tool) Summary() string {
@@ -24,9 +27,17 @@ func (t Tool) Summary() string {
 	return strings.TrimSuffix(first, ".") + "."
 }
 
+var closingTag = regexp.MustCompile(`(?i)<\s*/\s*untrusted\s*>`)
+
+type taintKey struct{}
+
+func WithTurn(ctx context.Context) context.Context {
+	return context.WithValue(ctx, taintKey{}, new(bool))
+}
+
 type Provider struct {
 	Catalog []Tool
-	Tools func(ctx context.Context) []Tool
+	Tools   func(ctx context.Context) []Tool
 }
 
 type Registry struct {
@@ -105,12 +116,25 @@ func (r *Registry) Call(ctx context.Context, call model.ToolCall) model.Message 
 		result.Content = "Error: arguments are not valid JSON"
 		return result
 	}
+	tainted, _ := ctx.Value(taintKey{}).(*bool)
+	if tool.Sensitive && tainted != nil && *tainted {
+		r.logger.Warn("Refused a sensitive tool after untrusted content", "name", tool.Name)
+		result.Content = "Error: refused, because untrusted content was read earlier in this turn. " +
+			"Tell the user what you would do and ask them to confirm in their next message."
+		return result
+	}
+	if tool.Untrusted && tainted != nil {
+		*tainted = true
+	}
 	r.logger.Debug("Running tool", "name", tool.Name, "args", string(args))
 	out, err := tool.Run(ctx, args)
 	if err != nil {
 		r.logger.Warn("Tool failed", "name", tool.Name, "error", err)
 		result.Content = "Error: " + err.Error()
 		return result
+	}
+	if tool.Untrusted {
+		out = fmt.Sprintf("<untrusted source=%q>\n%s\n</untrusted>", tool.Name, closingTag.ReplaceAllString(out, "</ untrusted>"))
 	}
 	result.Content = out
 	return result

@@ -208,3 +208,34 @@ func TestValidate_WebNeedsABaseUrlAndOidc(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidate_NewsAndMonitorNeedUsersAndAddresses(t *testing.T) {
+	for name, json := range map[string]string{
+		"news without token":     `{"News":{"Url":"http://miniflux:8080","Users":["radu"]}}`,
+		"news without users":     `{"News":{"Url":"http://miniflux:8080","Token":"t"}}`,
+		"news url not http":      `{"News":{"Url":"miniflux:8080","Token":"t","Users":["radu"]}}`,
+		"monitor without users":  `{"Monitor":{"AlertmanagerUrl":"http://alertmanager:9093"}}`,
+		"monitor bad vmalert":    `{"Monitor":{"VmalertUrls":["vmalert"],"Users":["radu"]}}`,
+		"monitor without a time": `{"Monitor":{"LogsUrl":"http://victorialogs:9428","Users":["radu"],"Timeout":0}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			setRequired(t)
+			if _, err := Load(writeConfig(t, json)); err == nil {
+				t.Fatal("expected a validation error")
+			}
+		})
+	}
+	setRequired(t)
+	t.Setenv("SOUV__news__url", "http://miniflux:8080")
+	t.Setenv("SOUV__news__token", "t")
+	t.Setenv("SOUV__news__users", "radu")
+	t.Setenv("SOUV__monitor__vmalertUrls", "http://vmalert:8880,http://vmalert-logs:8880")
+	t.Setenv("SOUV__monitor__users", "radu")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.News.Enabled() || len(cfg.Monitor.VmalertUrls) != 2 || cfg.Monitor.Timeout <= 0 {
+		t.Fatalf("%+v %+v", cfg.News, cfg.Monitor)
+	}
+}

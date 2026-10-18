@@ -175,7 +175,8 @@ func calendarTools(store *calendar.Store) []Tool {
 
 	return append(tools,
 		Tool{
-			Name: "calendar_create",
+			Name:      "calendar_create",
+			Sensitive: true,
 			Description: "Add an event to one of the user's calendars. Without an end, a timed event lasts an " +
 				"hour and an all-day event one day. Times are in " + zone + ".",
 			Parameters: json.RawMessage(fmt.Sprintf(`{
@@ -208,7 +209,8 @@ func calendarTools(store *calendar.Store) []Tool {
 			},
 		},
 		Tool{
-			Name: "calendar_update",
+			Name:      "calendar_update",
+			Sensitive: true,
 			Description: "Change an event in one of the user's calendars. Only the fields given change; an empty " +
 				"string clears description, location or recurrence. Moving the start without an end keeps the " +
 				"event's length. On a recurring event the change applies to the whole series.",
@@ -244,7 +246,8 @@ func calendarTools(store *calendar.Store) []Tool {
 			},
 		},
 		Tool{
-			Name: "calendar_delete",
+			Name:      "calendar_delete",
+			Sensitive: true,
 			Description: "Delete an event from one of the user's calendars, every occurrence if it repeats. " +
 				"Only when the user asks for it.",
 			Parameters: json.RawMessage(fmt.Sprintf(`{

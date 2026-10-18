@@ -13,7 +13,8 @@ import (
 func MemoryTools(store *memory.Store) []Tool {
 	return []Tool{
 		{
-			Name: "memory_save",
+			Name:      "memory_save",
+			Sensitive: true,
 			Description: "Save a durable fact for future conversations: the user's preferences, personal details, " +
 				"people and places in their life, ongoing projects and decisions. One self-contained fact per call, " +
 				"written in the third person (\"The user is vegetarian\"). Do not save small talk or things that only " +
@@ -87,7 +88,8 @@ func MemoryTools(store *memory.Store) []Tool {
 			},
 		},
 		{
-			Name: "memory_update",
+			Name:      "memory_update",
+			Sensitive: true,
 			Description: "Rewrite a saved memory when new information refines, corrects or replaces it, keeping " +
 				"one fact instead of two. The new content replaces the old completely, so include everything that " +
 				"still holds (\"The user works at Odoo\" becomes \"The user has worked at Odoo since September 2025\").",
@@ -117,7 +119,8 @@ func MemoryTools(store *memory.Store) []Tool {
 			},
 		},
 		{
-			Name: "memory_forget",
+			Name:      "memory_forget",
+			Sensitive: true,
 			Description: "Delete a saved memory by its id, when the user asks you to forget it or it no longer " +
 				"holds at all. To correct or refine a memory, use memory_update instead.",
 			Parameters: json.RawMessage(`{

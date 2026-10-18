@@ -46,6 +46,16 @@ are fetched, and every connection, redirects included, is checked on the
 address actually dialled, so private, loopback, link-local and other non-public
 ranges are refused even behind a public name.
 
+Text written by others can carry instructions aimed at the model, so tools are
+marked untrusted (`web_search`, `web_fetch` and the news and monitoring tools)
+or sensitive (`memory_save`, `memory_update`, `memory_forget`,
+`calendar_create`, `calendar_update`, `calendar_delete`). Untrusted output is
+wrapped in `<untrusted source="...">` tags the model is told never to take
+instructions from, and once an untrusted tool has run, sensitive calls are
+refused for the rest of that turn: the model says what it would do and the user
+confirms in their next message. Calendar reads are not marked untrusted, since
+changing an event needs its uid from a read first.
+
 `search_history` runs the same hybrid search as the `/history` search over every
 other conversation and returns the matching messages with their conversation
 and date, so the model can look up what was said before.
@@ -286,6 +296,40 @@ The lists can be set from the environment as comma separated values
 zone new events are written with (plus a matching `VTIMEZONE`). Left out, the
 process's local zone is used and new events are written in UTC. The same zone
 is used for the current date and time the model is given on every turn.
+
+### News
+
+```json
+"News": { "Url": "http://miniflux:8080", "Token": "...", "Users": ["radu"] }
+```
+
+Reads a [Miniflux](https://miniflux.app) server through its API with
+`news_feeds`, `news_list` (by words, category, feed, read status, starred and
+age) and `news_get` (one entry as markdown). Only GET requests are sent, so
+nothing is marked read. `Token` is an API key made in Miniflux under Settings,
+API Keys, and it reads that Miniflux user's feeds, so only the souvenir users
+named in `Users` are offered the tools. `Timeout` is in milliseconds (default
+10000).
+
+### Monitoring
+
+```json
+"Monitor": { "AlertmanagerUrl": "http://alertmanager:9093",
+             "VmalertUrls": ["http://vmalert:8880", "http://vmalert-logs:8880"],
+             "MetricsUrl": "http://victoriametrics:8428",
+             "LogsUrl": "http://victorialogs:9428", "Users": ["radu"] }
+```
+
+Lets the model investigate alerts: `alerts_list` (firing alerts from
+Alertmanager), `alert_rules` (the rules behind them from each vmalert),
+`metrics_names` and `metrics_query` (MetricsQL, current values or a summary over
+up to 31 days) and `logs_query` (LogsQL against VictoriaLogs). Each URL is
+optional and its tools are offered only when it is set. Output is capped (30
+series, 200 log lines), and the tools only call fixed read endpoints, so the
+model chooses a query but never a path. These APIs have no auth of their own,
+so keep them off networks where anything less careful can reach them. Only the
+users named in `Users` are offered the tools. `Timeout` is in milliseconds
+(default 15000).
 
 `Llm.Thinking` sets llama.cpp's `enable_thinking` template argument. Leave it
 out for other servers: nothing server specific is sent unless it is set.

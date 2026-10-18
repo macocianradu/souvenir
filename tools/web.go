@@ -12,7 +12,8 @@ import (
 
 func WebSearch(searcher web.Searcher) Tool {
 	return Tool{
-		Name: "web_search",
+		Name:      "web_search",
+		Untrusted: true,
 		Description: "Search the web. Use it for current events, facts you are unsure of, or anything " +
 			"that may have changed since your training. Returns titles, links and short snippets; " +
 			"cite the links you rely on.",
@@ -78,7 +79,8 @@ func formatResults(found web.Results, limit int) string {
 
 func WebFetch(fetcher *web.Fetcher, maxChars int) Tool {
 	return Tool{
-		Name: "web_fetch",
+		Name:      "web_fetch",
+		Untrusted: true,
 		Description: "Read a web page or text file by its URL, as markdown with the page's clutter removed. " +
 			"Use it on links from web_search when the snippet is not enough, or on a link the user gives. " +
 			"Long pages come in parts: the end of each part says which start to ask for next.",
