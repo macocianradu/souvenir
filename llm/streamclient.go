@@ -51,11 +51,13 @@ type ToolCallDelta struct {
 
 func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message, tools []ToolSpec) (<-chan StreamEvent, error) {
 	requestBody := ChatRequest{
-		Model:    cl.Cfg.Llm.Model,
-		Messages: messages,
-		Tools:    tools,
-		Stream:   true,
-		Kwargs:   cl.templateKwargs(true),
+		Model:       cl.Cfg.Llm.Model,
+		Messages:    messages,
+		Tools:       tools,
+		Stream:      true,
+		MaxTokens:   cl.Cfg.Llm.MaxTokens,
+		Temperature: cl.Cfg.Llm.Temperature,
+		Kwargs:      cl.templateKwargs(true),
 	}
 	return cl.CallStream(ctx, requestBody)
 }

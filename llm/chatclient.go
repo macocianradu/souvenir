@@ -29,11 +29,13 @@ type ChatClient struct {
 // Request Types
 
 type ChatRequest struct {
-	Model    string          `json:"model"`
-	Messages []model.Message `json:"messages"`
-	Tools    []ToolSpec      `json:"tools,omitempty"`
-	Stream   bool            `json:"stream,omitempty"`
-	Kwargs   *Kwargs         `json:"chat_template_kwargs,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []model.Message `json:"messages"`
+	Tools       []ToolSpec      `json:"tools,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	Kwargs      *Kwargs         `json:"chat_template_kwargs,omitempty"`
 }
 
 type Kwargs struct {

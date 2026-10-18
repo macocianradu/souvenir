@@ -148,6 +148,8 @@ type LLMConfig struct {
 	TitleModel    string
 	Thinking      *bool
 	MaxToolRounds int
+	MaxTokens     int
+	Temperature   *float64
 	ContextBudget int
 	KeepRecent    int
 	MemoryRecall  int
@@ -228,7 +230,7 @@ func defaultConfig() *Config {
 			Key:     "",
 			Timeout: 300000,
 		},
-		LLMConfig{MaxToolRounds: 28, ContextBudget: 12000, KeepRecent: 8, MemoryRecall: 5},
+		LLMConfig{MaxToolRounds: 28, MaxTokens: 4096, ContextBudget: 12000, KeepRecent: 8, MemoryRecall: 5},
 		[]LogConfig{{Level: slog.LevelInfo, Format: "text"}},
 		DbConfig{
 			Url:          "localhost",
@@ -351,6 +353,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Llm.MaxToolRounds <= 0 {
 		return errors.New("Llm.MaxToolRounds must be positive")
+	}
+	if cfg.Llm.MaxTokens < 0 {
+		return errors.New("Llm.MaxTokens must not be negative")
 	}
 	if cfg.Llm.ContextBudget < 0 {
 		return errors.New("Llm.ContextBudget must not be negative")
