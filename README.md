@@ -222,7 +222,7 @@ terminal, so an entry without a target writes to `souvenir.log`.
                  "ChunkSize": 400, "ChunkOverlap": 40 },
   "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
                  "BatchSize": 64, "Timeout": 60000,
-                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72, "DistanceMargin": 0.15,
+                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72, "DistanceMargin": 0.15, "RecallDistance": 0.5,
                  "QueryPrefix": "", "DocPrefix": "" },
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
@@ -296,7 +296,11 @@ out for other servers: nothing server specific is sent unless it is set.
 embedded. `MaxDistance` drops vector matches above that cosine distance (0
 turns the cutoff off), and `DistanceMargin` drops those further than that
 from the best match, since short messages such as "hi" sit at a similar
-distance from every query. The right values depend on the model. `QueryPrefix` and
+distance from every query. `RecallDistance` is the stricter cutoff for the
+memories handed to the model unasked on every message (`Llm.MemoryRecall` of
+them at most); searching memories on request keeps `MaxDistance`. With debug
+logging, each recalled memory is logged with its distance, which helps tune
+it. The right values depend on the model. `QueryPrefix` and
 `DocPrefix` are prepended to search queries and stored chunks for models that
 expect instructions; Qwen3-Embedding wants a query prefix such as
 `"Instruct: Given a search query, retrieve relevant passages\nQuery: "` and

@@ -139,7 +139,7 @@ func (t *turn) recall(ctx context.Context) {
 	}
 	recallCtx, cancel := context.WithTimeout(ctx, recallTimeout)
 	defer cancel()
-	found, err := t.agent.memories.Search(recallCtx, query, limit)
+	found, err := t.agent.memories.Recall(recallCtx, query, limit)
 	if err != nil {
 		t.agent.logger.Warn("Could not recall memories", "error", err)
 	}

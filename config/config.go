@@ -109,6 +109,7 @@ type EmbeddingConfig struct {
 	DocPrefix      string
 	MaxDistance    float64
 	DistanceMargin float64
+	RecallDistance float64
 }
 
 type ApiConfig struct {
@@ -223,6 +224,7 @@ func defaultConfig() *Config {
 			Quiet:          300,
 			MaxDistance:    0.72,
 			DistanceMargin: 0.15,
+			RecallDistance: 0.5,
 		},
 		SshConfig{
 			Listen:         ":23234",
@@ -348,6 +350,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Embedding.MaxDistance < 0 || cfg.Embedding.MaxDistance > 2 {
 		return errors.New("Embedding.MaxDistance must be between 0 and 2")
+	}
+	if cfg.Embedding.RecallDistance < 0 || cfg.Embedding.RecallDistance > 2 {
+		return errors.New("Embedding.RecallDistance must be between 0 and 2")
 	}
 	if cfg.Embedding.DistanceMargin < 0 {
 		return errors.New("Embedding.DistanceMargin must not be negative")

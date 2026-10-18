@@ -143,20 +143,58 @@ func (s *Store) List(ctx context.Context) ([]Memory, error) {
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, error) {
+	var maxDistance float64
+	if s.embedder != nil {
+		maxDistance = s.embedder.MaxDistance()
+	}
+	found, err := s.search(ctx, query, limit, maxDistance)
+	return memories(found), err
+}
+
+func (s *Store) Recall(ctx context.Context, message string, limit int) ([]Memory, error) {
+	var maxDistance float64
+	if s.embedder != nil {
+		maxDistance = s.embedder.RecallDistance()
+	}
+	found, err := s.search(ctx, message, limit, maxDistance)
+	for _, h := range found {
+		if h.distance != nil {
+			s.logger.Debug("Recalled memory", "id", h.Id, "distance", *h.distance)
+		} else {
+			s.logger.Debug("Recalled memory", "id", h.Id, "keyword", true)
+		}
+	}
+	return memories(found), err
+}
+
+type hit struct {
+	Memory
+	distance *float64
+}
+
+func memories(hits []hit) []Memory {
+	found := make([]Memory, len(hits))
+	for i, h := range hits {
+		found[i] = h.Memory
+	}
+	return found
+}
+
+func (s *Store) search(ctx context.Context, query string, limit int, maxDistance float64) ([]hit, error) {
 	userId, err := users.Id(ctx)
 	if err != nil {
 		return nil, err
 	}
 	args := []any{query, limit, userId}
-	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank WHERE false`
+	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank, NULL::float8 AS distance WHERE false`
 	if s.embedder != nil {
 		vec, err := s.embedder.EmbedQuery(ctx, query)
 		if err != nil {
 			s.logger.Warn("Could not embed query, using keyword search only", "error", err)
 		} else {
-			args = append(args, pgvector.NewVector(vec), s.embedder.MaxDistance(), s.embedder.DistanceMargin())
+			args = append(args, pgvector.NewVector(vec), maxDistance, s.embedder.DistanceMargin())
 			vectorLeg = fmt.Sprintf(`
-				SELECT id, row_number() OVER (ORDER BY distance) AS rank
+				SELECT id, row_number() OVER (ORDER BY distance) AS rank, distance
 				  FROM (
 					  SELECT id, distance, min(distance) OVER () AS best
 					    FROM (
@@ -172,18 +210,18 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, 
 	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		WITH keyword AS (
-			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank
+			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank, NULL::float8 AS distance
 			  FROM memories m, websearch_to_tsquery('english', $1) q
 			 WHERE m.tsv @@ q
 			   AND m.user_id = $3
 		),
 		vector AS (%s),
 		fused AS (
-			  SELECT id, sum(1.0 / (60 + rank)) AS score
+			  SELECT id, sum(1.0 / (60 + rank)) AS score, min(distance) AS distance
 			    FROM (SELECT * FROM keyword UNION ALL SELECT * FROM vector) ranked
 			GROUP BY id
 		)
-		  SELECT m.id, m.content, m.created_at
+		  SELECT m.id, m.content, m.created_at, f.distance
 		    FROM fused f
 		    JOIN memories m ON m.id = f.id
 		ORDER BY f.score DESC
@@ -193,7 +231,10 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, 
 		s.logger.Error("Memory search failed", "error", err)
 		return nil, err
 	}
-	return pgx.CollectRows(rows, scanMemory)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (hit, error) {
+		var h hit
+		return h, row.Scan(&h.Id, &h.Content, &h.CreatedAt, &h.distance)
+	})
 }
 
 func (s *Store) Backfill(ctx context.Context) error {
