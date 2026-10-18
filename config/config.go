@@ -121,19 +121,20 @@ func (config DbConfig) ConnectionString() string {
 }
 
 type EmbeddingConfig struct {
-	Url            string
-	Key            string
-	Model          string
-	Dim            int
-	Timeout        int
-	BatchSize      int
-	Interval       int
-	Quiet          int
-	QueryPrefix    string
-	DocPrefix      string
-	MaxDistance    float64
-	DistanceMargin float64
-	RecallDistance float64
+	Url              string
+	Key              string
+	Model            string
+	Dim              int
+	Timeout          int
+	BatchSize        int
+	Interval         int
+	Quiet            int
+	QueryPrefix      string
+	DocPrefix        string
+	MaxDistance      float64
+	DistanceMargin   float64
+	RecallDistance   float64
+	RecallDeviations float64
 }
 
 type ApiConfig struct {
@@ -239,16 +240,17 @@ func defaultConfig() *Config {
 			ChunkOverlap: 40,
 		},
 		EmbeddingConfig{
-			Url:            "",
-			Key:            "",
-			Model:          "",
-			BatchSize:      64,
-			Timeout:        60000,
-			Interval:       60,
-			Quiet:          300,
-			MaxDistance:    0.72,
-			DistanceMargin: 0.15,
-			RecallDistance: 0.5,
+			Url:              "",
+			Key:              "",
+			Model:            "",
+			BatchSize:        64,
+			Timeout:          60000,
+			Interval:         60,
+			Quiet:            300,
+			MaxDistance:      0.72,
+			DistanceMargin:   0.15,
+			RecallDistance:   0.5,
+			RecallDeviations: 3,
 		},
 		SshConfig{
 			Listen:         ":23234",
@@ -379,6 +381,9 @@ func (cfg Config) validate() error {
 	}
 	if cfg.Embedding.RecallDistance < 0 || cfg.Embedding.RecallDistance > 2 {
 		return errors.New("Embedding.RecallDistance must be between 0 and 2")
+	}
+	if cfg.Embedding.RecallDeviations < 0 {
+		return errors.New("Embedding.RecallDeviations must not be negative")
 	}
 	if cfg.Embedding.DistanceMargin < 0 {
 		return errors.New("Embedding.DistanceMargin must not be negative")

@@ -59,6 +59,10 @@ func (e Embedder) RecallDistance() float64 {
 	return e.Cfg.RecallDistance
 }
 
+func (e Embedder) RecallDeviations() float64 {
+	return e.Cfg.RecallDeviations
+}
+
 func (e Embedder) DistanceMargin() float64 {
 	return e.Cfg.DistanceMargin
 }

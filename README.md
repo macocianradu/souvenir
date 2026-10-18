@@ -232,7 +232,7 @@ terminal, so an entry without a target writes to `souvenir.log`.
                  "ChunkSize": 400, "ChunkOverlap": 40 },
   "Embedding": { "Url": "...", "Key": "", "Model": "...", "Dim": 1024,
                  "BatchSize": 64, "Timeout": 60000,
-                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72, "DistanceMargin": 0.15, "RecallDistance": 0.5,
+                 "Interval": 60, "Quiet": 300, "MaxDistance": 0.72, "DistanceMargin": 0.15, "RecallDistance": 0.5, "RecallDeviations": 3,
                  "QueryPrefix": "", "DocPrefix": "" },
   "Logging":   [{ "Level": "debug", "Format": "json", "Target": "log.log" }]
 }
@@ -342,9 +342,14 @@ turns the cutoff off), and `DistanceMargin` drops those further than that
 from the best match, since short messages such as "hi" sit at a similar
 distance from every query. `RecallDistance` is the stricter cutoff for the
 memories handed to the model unasked on every message (`Llm.MemoryRecall` of
-them at most); searching memories on request keeps `MaxDistance`. With debug
-logging, each recalled memory is logged with its distance, which helps tune
-it. The right values depend on the model. `QueryPrefix` and
+them at most); searching memories on request keeps `MaxDistance`. A recalled memory must
+also stand out: be at least `RecallDeviations` standard deviations closer to
+the message than the user's memories are on average (0 turns this off). Long
+memories about the user sit fairly close to any message, so a cutoff alone lets
+them through; for an unrelated message none is much closer than the rest. The
+check applies once a user has 10 embedded memories. With debug logging, each
+recalled memory is logged with its distance and its deviations (`z`), which
+helps tune both. The right values depend on the model. `QueryPrefix` and
 `DocPrefix` are prepended to search queries and stored chunks for models that
 expect instructions; Qwen3-Embedding wants a query prefix such as
 `"Instruct: Given a search query, retrieve relevant passages\nQuery: "` and
