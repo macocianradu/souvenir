@@ -131,3 +131,31 @@ func TestUsers_KeysAndTheLastAdmin(t *testing.T) {
 		t.Error("removing a user kept their keys")
 	}
 }
+
+func TestToolRounds_SurviveARoundTrip(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	owner, err := users.NewStore(pool).Owner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = users.WithUser(ctx, owner)
+	hist := history.New(pool, config.DbConfig{ChunkSize: 50, ChunkOverlap: 10})
+	call := model.ToolCall{Id: "call_1", Type: "function", Function: model.FunctionCall{Name: "web_search", Arguments: `{"query":"x"}`}}
+	conv, err := hist.SaveConversation(ctx, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "look it up", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{call}, Seq: 2},
+		{Role: "tool", ToolCallId: "call_1", Content: "found", Seq: 3},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := hist.GetConversation(ctx, conv.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 3 || len(got.Messages[1].ToolCalls) != 1 || got.Messages[1].ToolCalls[0] != call ||
+		got.Messages[2].ToolCallId != "call_1" || got.Messages[0].ToolCalls != nil || got.Messages[0].ToolCallId != "" {
+		t.Fatalf("%+v", got.Messages)
+	}
+}

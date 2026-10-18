@@ -30,9 +30,14 @@ by index across chunks and assembled into a complete message at the end.
 
 Tool calls run in a loop: the calls are dispatched locally, their results
 appended, and the model called again, up to `Llm.MaxToolRounds` rounds. The
-rounds are working state for the turn and are shown faded above the answer, but
-only the final reply is saved, so a reopened conversation sends exactly what a
-live one does; the cost is that the model reruns a lookup it needs again later.
+rounds are shown faded above the answer and saved with the conversation as each
+one finishes, so a turn stopped by Esc, the tool limit or a restart can be
+continued ("go on") from the results already gathered, and later turns can build
+on earlier lookups instead of rerunning them. Before the history is sent, a call
+left without a result gets one saying it was not run, and a result whose
+request was folded into a summary is dropped, since the API refuses either.
+Titles and summaries are written from the user's and the assistant's words
+only, without the tool rounds.
 Tools live in a registry mapping a name to a Go function and a JSON schema, and
 return a plain string so the packages behind them never import the API types.
 Esc cancels a running tool.
@@ -344,12 +349,13 @@ distance from every query. `RecallDistance` is the stricter cutoff for the
 memories handed to the model unasked on every message (`Llm.MemoryRecall` of
 them at most); searching memories on request keeps `MaxDistance`. A recalled memory must
 also stand out: be at least `RecallDeviations` standard deviations closer to
-the message than the user's memories are on average (0 turns this off). Long
-memories about the user sit fairly close to any message, so a cutoff alone lets
-them through; for an unrelated message none is much closer than the rest. The
-check applies once a user has 10 embedded memories. With debug logging, each
-recalled memory is logged with its distance and its deviations (`z`), which
-helps tune both. The right values depend on the model. `QueryPrefix` and
+the message than a fixed set of decoys are: made-up memories about someone
+else (0 turns this off). Memories about the user sit fairly close to any
+message, so a cutoff alone lets them through; for an unrelated message none is
+much closer than a stranger's would be. This works however few memories a
+user has. The decoys are embedded once, on the first recall. With debug
+logging, each message logs its cutoff and each recalled memory its distance
+and deviations (`z`), which helps tune both. The right values depend on the model. `QueryPrefix` and
 `DocPrefix` are prepended to search queries and stored chunks for models that
 expect instructions; Qwen3-Embedding wants a query prefix such as
 `"Instruct: Given a search query, retrieve relevant passages\nQuery: "` and

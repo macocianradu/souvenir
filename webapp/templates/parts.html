@@ -31,7 +31,8 @@
 </ul>{{else}}
 <p class="empty">No conversations yet.</p>{{end}}{{end}}
 
-{{define "message"}}{{if eq .Role "user"}}
+{{define "message"}}{{if eq .Role "trail"}}
+<div class="activity"><ul class="trail">{{range .Trail}}<li class="{{.Kind}}">{{.Text}}</li>{{end}}</ul></div>{{else if eq .Role "user"}}
 <article class="msg user">
   <div class="bubble">{{range .Images}}<img src="{{.}}" alt="Attached image">{{end}}{{if .Content}}<p>{{.Content}}</p>{{end}}</div>
   {{template "stamp" .Time}}

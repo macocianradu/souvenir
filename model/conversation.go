@@ -51,6 +51,21 @@ func EstimateTokens(messages []Message) int {
 	tokens := 0
 	for _, m := range messages {
 		tokens += len(m.Content)/4 + 4 + len(m.Images)*imageTokens
+		for _, call := range m.ToolCalls {
+			tokens += (len(call.Function.Name)+len(call.Function.Arguments))/4 + 4
+		}
 	}
 	return tokens
+}
+
+func Spoken(messages []Message) []Message {
+	var out []Message
+	for _, m := range messages {
+		if m.Role == "tool" || (m.Role == "assistant" && m.Content == "") {
+			continue
+		}
+		m.ToolCalls = nil
+		out = append(out, m)
+	}
+	return out
 }

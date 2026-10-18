@@ -251,7 +251,6 @@ func (m uiModel) submit() (tea.Model, tea.Cmd) {
 	m.viewport.GotoBottom()
 	m.streaming = true
 	m.streamCtx, m.cancelStream = context.WithCancel(m.ctx)
-	m.toolTrail = nil
 	m.turnMemories = nil
 	m.startWait()
 	m.streamCh = m.agent.Run(m.streamCtx, m.client, m.conversation)
@@ -281,9 +280,12 @@ func (m uiModel) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 		return m.handleStreamClosed(streamClosedMessage{})
 	case ev.Trail != nil:
-		// What streamed so far was the text of the tool request, now in the trail.
 		m.answerBuffer.Reset()
-		m.toolTrail = append(m.toolTrail, ev.Trail...)
+		for _, msg := range ev.Trail {
+			m.appendMessage(msg)
+		}
+		m.refreshViewport()
+		return m, tea.Batch(waitForEvent(m.streamCh), m.requestSave())
 	case ev.Memories != nil:
 		m.turnMemories = ev.Memories
 	}
@@ -414,7 +416,6 @@ func (m *uiModel) openConversation(conv model.Conversation) {
 	m.titling = false
 	m.summarizing = false
 	m.thinkingBuffer.Reset()
-	m.toolTrail = nil
 	m.turnMemories = nil
 	m.refreshViewport()
 	m.viewport.GotoBottom()

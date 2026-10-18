@@ -61,7 +61,6 @@ type uiModel struct {
 	titling        bool
 	summarizing    bool
 	convGen        int
-	toolTrail      []model.Message
 	memories       *memory.Store
 	turnMemories   []memory.Memory
 	remote         bool

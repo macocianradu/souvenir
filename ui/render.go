@@ -50,32 +50,28 @@ func (m *uiModel) renderMessages() string {
 		if m.thinkingBuffer.Len() > 0 {
 			thinking()
 		}
-		for _, msg := range m.toolTrail {
-			line := "↳ " + truncate(msg.Content, 100)
-			if msg.Role != "tool" {
-				line = truncate(msg.Content, 200)
-				for _, call := range msg.ToolCalls {
-					line += "\n⚙ " + call.Function.Name + " " + truncate(call.Function.Arguments, 80)
-				}
-				line = strings.TrimPrefix(line, "\n")
-			}
-			b.WriteString(toolStyle.Width(width).Render(line))
-			b.WriteString("\n")
-		}
-		if len(m.toolTrail) > 0 {
-			b.WriteString("\n")
-		}
 	}
 
 	messages := m.conversation.Messages
 	activityAt := len(messages)
-	if last := len(messages) - 1; !m.streaming && last >= 0 && messages[last].Role == "assistant" {
-		activityAt = last
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			activityAt = i + 1
+			break
+		}
 	}
 
 	for i, message := range messages {
 		if i == activityAt {
 			activity()
+		}
+		if message.IsToolRound() {
+			b.WriteString(toolStyle.Width(width).Render(toolLine(message)))
+			b.WriteString("\n")
+			if i+1 == len(messages) || !messages[i+1].IsToolRound() {
+				b.WriteString("\n")
+			}
+			continue
 		}
 		switch message.Role {
 		case "user":
@@ -92,6 +88,17 @@ func (m *uiModel) renderMessages() string {
 		entry(m.agentStyle.Render("Agent: ") + formatMarkdown(m.answerBuffer.String()))
 	}
 	return b.String()
+}
+
+func toolLine(msg model.Message) string {
+	if msg.Role == "tool" {
+		return "↳ " + truncate(msg.Content, 100)
+	}
+	line := truncate(msg.Content, 200)
+	for _, call := range msg.ToolCalls {
+		line += "\n⚙ " + call.Function.Name + " " + truncate(call.Function.Arguments, 80)
+	}
+	return strings.TrimPrefix(line, "\n")
 }
 
 func userText(message model.Message) string {

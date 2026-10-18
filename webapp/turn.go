@@ -19,6 +19,7 @@ type turn struct {
 	id             string
 	userId         string
 	conversationId string
+	userSeq        int
 	cancel         context.CancelFunc
 
 	mu      sync.Mutex
@@ -68,7 +69,7 @@ func newTurns() *turns {
 	return &turns{byId: map[string]*turn{}, byConversation: map[string]*turn{}}
 }
 
-func (ts *turns) start(ctx context.Context, userId, conversationId string) (*turn, context.Context, error) {
+func (ts *turns) start(ctx context.Context, userId, conversationId string, userSeq int) (*turn, context.Context, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if t, ok := ts.byConversation[conversationId]; ok {
@@ -77,7 +78,7 @@ func (ts *turns) start(ctx context.Context, userId, conversationId string) (*tur
 		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	t := &turn{id: newId(), userId: userId, conversationId: conversationId, cancel: cancel, changed: make(chan struct{})}
+	t := &turn{id: newId(), userId: userId, conversationId: conversationId, userSeq: userSeq, cancel: cancel, changed: make(chan struct{})}
 	ts.byId[t.id] = t
 	ts.byConversation[conversationId] = t
 	return t, ctx, nil
@@ -153,6 +154,17 @@ func (s *Server) runTurn(ctx context.Context, t *turn, client llm.ChatClient, co
 			}
 			st.Content += ev.Content
 		})
+		// Each tool round is saved as it happens, so a turn stopped by the user,
+		// the tool limit or a restart can be picked up where it was.
+		if ev.Trail != nil {
+			for _, m := range ev.Trail {
+				m.Seq = len(conv.Messages) + 1
+				conv.Messages = append(conv.Messages, m)
+			}
+			if _, err := s.app.History.SaveConversation(saveCtx, conv); err != nil {
+				s.logger.Error("Could not save the tool round", "conversation", conv.Id, "error", err)
+			}
+		}
 	}
 
 	st, _ := t.snapshot()
@@ -224,6 +236,23 @@ type trailLine struct {
 	Text string
 }
 
+func trailLines(messages []model.Message) []trailLine {
+	var lines []trailLine
+	for _, m := range messages {
+		if m.Role == "tool" {
+			lines = append(lines, trailLine{Kind: "result", Text: oneLine(m.Content, 140)})
+			continue
+		}
+		if text := oneLine(m.Content, 200); text != "" {
+			lines = append(lines, trailLine{Kind: "say", Text: text})
+		}
+		for _, call := range m.ToolCalls {
+			lines = append(lines, trailLine{Kind: "call", Text: call.Function.Name + " " + oneLine(call.Function.Arguments, 100)})
+		}
+	}
+	return lines
+}
+
 type liveView struct {
 	TurnId      string
 	Memories    []string
@@ -249,18 +278,7 @@ func (s *Server) liveView(t *turn, st turnState) liveView {
 		Cancelled:   st.Cancelled,
 		Done:        st.Done,
 	}
-	for _, m := range st.Trail {
-		if m.Role == "tool" {
-			v.Trail = append(v.Trail, trailLine{Kind: "result", Text: oneLine(m.Content, 140)})
-			continue
-		}
-		if text := oneLine(m.Content, 200); text != "" {
-			v.Trail = append(v.Trail, trailLine{Kind: "say", Text: text})
-		}
-		for _, call := range m.ToolCalls {
-			v.Trail = append(v.Trail, trailLine{Kind: "call", Text: call.Function.Name + " " + oneLine(call.Function.Arguments, 100)})
-		}
-	}
+	v.Trail = trailLines(st.Trail)
 	if st.Done {
 		v.Messages = messageViews(st.Reply, s.location)
 	} else if st.Content != "" {

@@ -139,7 +139,7 @@ func (cl ChatClient) Summarize(ctx context.Context, previous string, messages []
 		prompt.WriteString("Summary so far:\n" + previous + "\n\n")
 	}
 	prompt.WriteString("New messages:\n")
-	for _, m := range messages {
+	for _, m := range model.Spoken(messages) {
 		fmt.Fprintf(&prompt, "%s: %s\n\n", m.Role, m.Content)
 	}
 	out, err := cl.Call(ctx, ChatRequest{
@@ -167,7 +167,7 @@ func (cl ChatClient) Rename(ctx context.Context, messages []model.Message) (Rena
 		Messages: append([]model.Message{{
 			Role:    "system",
 			Content: "Reply with ONLY JSON with the form: {\"title\":<title>, \"summary\":<summary>}. Title <= 10 words. Summary 2-3 sentances.",
-		}}, messages...),
+		}}, model.Spoken(messages)...),
 		Kwargs: cl.templateKwargs(false),
 	}
 	request.Messages = append(request.Messages, model.Message{

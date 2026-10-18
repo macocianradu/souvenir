@@ -157,6 +157,10 @@ var migrations = []string{
 		updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 	);
 	`,
+	`
+	ALTER TABLE messages ADD COLUMN tool_calls JSONB;
+	ALTER TABLE messages ADD COLUMN tool_call_id TEXT;
+	`,
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {

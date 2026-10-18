@@ -246,7 +246,7 @@ func TestRender_ThinkingSitsFadedAboveTheAnswerUntilTheNextMessage(t *testing.T)
 	}
 }
 
-func TestToolLoop_SendsTheTrailButKeepsOnlyTheFinalReply(t *testing.T) {
+func TestToolLoop_KeepsTheRoundsSoALaterTurnCanBuildOnThem(t *testing.T) {
 	var streamed [][]model.Message
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req llm.ChatRequest
@@ -271,7 +271,7 @@ func TestToolLoop_SendsTheTrailButKeepsOnlyTheFinalReply(t *testing.T) {
 	h := newHarness(t, srv.URL, registry)
 	h.m.saving = true
 	h.pump(h.submit("please echo"))
-	if h.roles() != "user,assistant" || h.m.conversation.Messages[1].Content != "Final" || h.m.conversation.Messages[1].Seq != 2 {
+	if h.roles() != "user,assistant,tool,assistant" || h.m.conversation.Messages[3].Content != "Final" || h.m.conversation.Messages[3].Seq != 4 {
 		t.Fatalf("kept %s", h.roles())
 	}
 	wire, _ := json.Marshal(streamed[1])
@@ -284,14 +284,16 @@ func TestToolLoop_SendsTheTrailButKeepsOnlyTheFinalReply(t *testing.T) {
 
 	h.pump(h.submit("again"))
 	wire, _ = json.Marshal(streamed[2])
-	if strings.Contains(string(wire), "call_1") {
-		t.Fatal("an earlier turn's trail was sent")
+	if !strings.Contains(string(wire), `"tool_call_id":"call_1"`) {
+		t.Fatalf("an earlier turn's rounds were not sent: %s", wire)
 	}
 
 	reply = "loop"
 	before := len(h.m.conversation.Messages)
 	h.pump(h.submit("loop forever"))
-	if !strings.Contains(h.status(), "tool call limit") || len(h.m.conversation.Messages) != before+1 {
+	// The rounds run before the limit stay, so "continue" picks up from them.
+	if !strings.Contains(h.status(), "tool call limit") || len(h.m.conversation.Messages) <= before+1 ||
+		h.m.conversation.Messages[len(h.m.conversation.Messages)-1].Role != "tool" {
 		t.Fatalf("%q, %d messages", h.status(), len(h.m.conversation.Messages))
 	}
 }

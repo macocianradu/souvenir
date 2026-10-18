@@ -109,6 +109,7 @@ type messageView struct {
 	HTML    template.HTML
 	Images  []template.URL
 	Time    stamp
+	Trail   []trailLine
 }
 
 type stamp struct {
@@ -147,7 +148,15 @@ var imageTypes = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
 func messageViews(messages []model.Message, loc *time.Location) []messageView {
 	now := time.Now().In(loc)
 	var views []messageView
-	for _, m := range messages {
+	for i, m := range messages {
+		if m.IsToolRound() {
+			if i == 0 || !messages[i-1].IsToolRound() {
+				views = append(views, messageView{Role: "trail"})
+			}
+			v := &views[len(views)-1]
+			v.Trail = append(v.Trail, trailLines([]model.Message{m})...)
+			continue
+		}
 		switch m.Role {
 		case "user":
 			v := messageView{Role: m.Role, Content: m.Content, Time: newStamp(m.CreatedAt, now)}

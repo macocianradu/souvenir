@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,7 +54,7 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	}
 	rows, err := cl.pool.Query(ctx,
 		`
-		  SELECT id, role, content, seq, created_at
+		  SELECT id, role, content, tool_calls, COALESCE(tool_call_id, ''), seq, created_at
 		    FROM messages
 		   WHERE conversation_id = $1
 		ORDER BY seq
@@ -65,9 +66,16 @@ func (cl DbClient) GetConversation(ctx context.Context, id string) (model.Conver
 	defer rows.Close()
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.Id, &msg.Role, &msg.Content, &msg.Seq, &msg.CreatedAt); err != nil {
+		var toolCalls []byte
+		if err := rows.Scan(&msg.Id, &msg.Role, &msg.Content, &toolCalls, &msg.ToolCallId, &msg.Seq, &msg.CreatedAt); err != nil {
 			cl.logger.Error("Could not read message", "conversation_id", id, "error", err)
 			return conv, err
+		}
+		if toolCalls != nil {
+			if err := json.Unmarshal(toolCalls, &msg.ToolCalls); err != nil {
+				cl.logger.Error("Could not read tool calls", "conversation_id", id, "seq", msg.Seq, "error", err)
+				return conv, err
+			}
 		}
 		conv.Messages = append(conv.Messages, msg)
 	}
@@ -305,13 +313,20 @@ func (cl DbClient) SaveConversation(ctx context.Context, conv model.Conversation
 func (cl DbClient) saveMessage(ctx context.Context, tx pgx.Tx, conversationId string, message model.Message) (string, time.Time, error) {
 	var id string
 	var createdAt time.Time
+	var toolCalls []byte
+	if len(message.ToolCalls) > 0 {
+		var err error
+		if toolCalls, err = json.Marshal(message.ToolCalls); err != nil {
+			return "", time.Time{}, fmt.Errorf("encode tool calls: %w", err)
+		}
+	}
 	if err := tx.QueryRow(ctx,
 		`
-		INSERT INTO messages (seq, role, content, conversation_id)
-		     VALUES ($1, $2, $3, $4)
+		INSERT INTO messages (seq, role, content, tool_calls, tool_call_id, conversation_id)
+		     VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
 		  RETURNING id, created_at
 		`,
-		message.Seq, message.Role, message.Content, conversationId).Scan(&id, &createdAt); err != nil {
+		message.Seq, message.Role, message.Content, toolCalls, message.ToolCallId, conversationId).Scan(&id, &createdAt); err != nil {
 		return "", time.Time{}, err
 	}
 

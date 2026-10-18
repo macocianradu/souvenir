@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +17,6 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/llm"
 )
 
-// fakeEmbedder answers with the vector given for each text.
 func fakeEmbedder(t *testing.T, vectors map[string][]float32, cfg config.EmbeddingConfig) *llm.Embedder {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req llm.EmbedRequest
@@ -25,8 +25,7 @@ func fakeEmbedder(t *testing.T, vectors map[string][]float32, cfg config.Embeddi
 		for i, text := range req.Input {
 			vec, ok := vectors[text]
 			if !ok {
-				t.Errorf("no vector for %q", text)
-				vec = []float32{1, 1, 1, 1}
+				vec = generic(text)
 			}
 			resp.Data = append(resp.Data, llm.Embedding{Embedding: vec, Index: i})
 		}
@@ -49,19 +48,14 @@ func TestRecall_OnlyMemoriesThatStandOut(t *testing.T) {
 	}
 	ctx = users.WithUser(ctx, owner)
 
-	// Eleven memories about the user's job sit close to one another and at
-	// much the same distance from any message, as long memories do; one about
-	// umbrellas points elsewhere.
 	vectors := map[string][]float32{
 		"Owns a yellow umbrella":            {0, 0, 0, 1},
 		"Does it look like rain":            {0.3, 0, 0, 1},
 		"Who wrote the first Naruto volume": {1, 0, 0, 0.3},
 	}
 	var job []string
-	for i := range 11 {
-		text := fmt.Sprintf("Salary detail number %d", i)
-		job = append(job, text)
-		vectors[text] = []float32{1, 0.05 * float32(i%3), 0.05 * float32(i%2), 0}
+	for i := range 5 {
+		job = append(job, fmt.Sprintf("Salary detail number %d", i))
 	}
 	embedder := fakeEmbedder(t, vectors, config.EmbeddingConfig{RecallDeviations: 3})
 	store, err := memory.NewStore(ctx, pool, embedder)
@@ -94,4 +88,12 @@ func TestRecall_OnlyMemoriesThatStandOut(t *testing.T) {
 	if found, _ := store.Search(ctx, "Who wrote the first Naruto volume", 5); len(found) != 5 {
 		t.Errorf("search found %d, want 5", len(found))
 	}
+}
+
+// generic is a vector near (1, 0, 0, 0), nudged by the text's hash.
+func generic(text string) []float32 {
+	h := fnv.New32a()
+	h.Write([]byte(text))
+	sum := h.Sum32()
+	return []float32{1, float32(sum%100) / 1000, float32(sum/100%100) / 1000, 0}
 }

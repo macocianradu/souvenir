@@ -183,7 +183,7 @@ func (t *turn) context() []model.Message {
 		}
 		context = append(context, model.Message{Role: "system", Content: b.String()})
 	}
-	context = append(context, t.conv.ContextMessages()...)
+	context = append(context, model.AnswerToolCalls(t.conv.ContextMessages())...)
 	return append(context, t.trail...)
 }
 

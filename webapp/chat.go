@@ -118,6 +118,10 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		Think:        s.llm.Cfg.Llm.Thinking != nil && *s.llm.Cfg.Llm.Thinking,
 	}
 	if t, ok := s.turns.running(u.Id, conv.Id); ok && conv.Id != "" {
+		shown := slices.IndexFunc(conv.Messages, func(m model.Message) bool { return m.Seq > t.userSeq })
+		if shown >= 0 {
+			p.Messages = messageViews(conv.Messages[:shown], s.location)
+		}
 		st, _ := t.snapshot()
 		live := s.liveView(t, st)
 		p.Live = &live
@@ -207,7 +211,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		think := r.FormValue("think") != ""
 		client.Cfg.Llm.Thinking = &think
 	}
-	t, turnCtx, err := s.turns.start(users.WithUser(s.base, u), u.Id, conv.Id)
+	t, turnCtx, err := s.turns.start(users.WithUser(s.base, u), u.Id, conv.Id, len(conv.Messages))
 	if err != nil {
 		fail(w, http.StatusConflict, "Wait for the reply to finish before sending another message.")
 		return
