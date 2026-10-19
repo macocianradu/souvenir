@@ -242,6 +242,22 @@ func TestWrite_AllDayEndIsTheLastDay(t *testing.T) {
 	}
 }
 
+func TestWrite_AcceptsSecondsAndOffsets(t *testing.T) {
+	s := newStore(t, nil)
+	brussels, _ := time.LoadLocation("Europe/Brussels")
+	want := time.Date(2026, 10, 15, 20, 0, 0, 0, brussels)
+	for _, start := range []string{"2026-10-15T20:00", "2026-10-15T20:00:00", "2026-10-15 20:00", "2026-10-15T20:00:00+02:00", "2026-10-15T18:00:00Z"} {
+		summary := "Match"
+		ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start})
+		if err != nil {
+			t.Fatalf("%s: %v", start, err)
+		}
+		if ev.AllDay || !ev.Start.Equal(want) {
+			t.Errorf("%s: got %v", start, ev.Start)
+		}
+	}
+}
+
 func TestFind_DoesNotEscapeTheCalendar(t *testing.T) {
 	s := newStore(t, map[string]string{"secret/holiday.ics": holiday})
 	if _, err := s.Get("work", "../secret/holiday"); !errors.Is(err, ErrNotFound) {

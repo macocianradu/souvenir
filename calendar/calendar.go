@@ -402,8 +402,13 @@ func (s *Store) parseTime(v string) (t time.Time, allDay bool, err error) {
 	if t, err = time.ParseInLocation("2006-01-02", v, s.loc); err == nil {
 		return t, true, nil
 	}
-	if t, err = time.ParseInLocation("2006-01-02T15:04", v, s.loc); err == nil {
-		return t, false, nil
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05", "2006-01-02 15:04", "2006-01-02 15:04:05"} {
+		if t, err = time.ParseInLocation(layout, v, s.loc); err == nil {
+			return t, false, nil
+		}
+	}
+	if t, err = time.Parse(time.RFC3339, v); err == nil {
+		return t.In(s.loc), false, nil
 	}
 	return t, false, fmt.Errorf("cannot read time %q, expected YYYY-MM-DD or YYYY-MM-DDTHH:MM", v)
 }
