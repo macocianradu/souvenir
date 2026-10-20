@@ -501,3 +501,25 @@ func TestImagePaste_AttachesUntilSentOrRemoved(t *testing.T) {
 		t.Fatalf("\n%s", h.screen())
 	}
 }
+
+func TestRender_RepliesAndToolCallsShowInTheOrderTheyRan(t *testing.T) {
+	h := newHarness(t, "", nil)
+	h.submit("plan my day")
+	call := func(id, name string) []model.ToolCall {
+		return []model.ToolCall{{Id: id, Type: "function", Function: model.FunctionCall{Name: name, Arguments: "{}"}}}
+	}
+	h.send(agentEventMessage{event: agent.Event{Trail: []model.Message{{Role: "assistant", Content: "Checking your calendar first.", ToolCalls: call("c1", "calendar_list")}}}})
+	h.send(agentEventMessage{event: agent.Event{Trail: []model.Message{{Role: "tool", ToolCallId: "c1", Content: "standup at 10"}}}})
+	h.send(agentEventMessage{event: agent.Event{Trail: []model.Message{{Role: "assistant", Content: "Now the weather.", ToolCalls: call("c2", "web_search")}}}})
+	h.send(agentEventMessage{event: agent.Event{Trail: []model.Message{{Role: "tool", ToolCallId: "c2", Content: "sunny"}}}})
+	h.reply("Standup at 10, and it will be sunny.")
+	screen := h.screen()
+	last := -1
+	for _, want := range []string{"Agent: Checking your calendar first.", "⚙ calendar_list", "↳ standup at 10", "Agent: Now the weather.", "⚙ web_search", "↳ sunny", "Agent: Standup at 10"} {
+		at := strings.Index(screen, want)
+		if at <= last {
+			t.Fatalf("%q is missing or out of order:\n%s", want, screen)
+		}
+		last = at
+	}
+}

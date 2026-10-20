@@ -66,9 +66,12 @@ func (m *uiModel) renderMessages() string {
 			activity()
 		}
 		if message.IsToolRound() {
+			if hasReply(message) {
+				entry(m.agentStyle.Render("Agent: ") + formatMarkdown(message.Content))
+			}
 			b.WriteString(toolStyle.Width(width).Render(toolLine(message)))
 			b.WriteString("\n")
-			if i+1 == len(messages) || !messages[i+1].IsToolRound() {
+			if i+1 == len(messages) || !messages[i+1].IsToolRound() || hasReply(messages[i+1]) {
 				b.WriteString("\n")
 			}
 			continue
@@ -94,11 +97,15 @@ func toolLine(msg model.Message) string {
 	if msg.Role == "tool" {
 		return "↳ " + truncate(msg.Content, 100)
 	}
-	line := truncate(msg.Content, 200)
+	var lines []string
 	for _, call := range msg.ToolCalls {
-		line += "\n⚙ " + call.Function.Name + " " + truncate(call.Function.Arguments, 80)
+		lines = append(lines, "⚙ "+call.Function.Name+" "+truncate(call.Function.Arguments, 80))
 	}
-	return strings.TrimPrefix(line, "\n")
+	return strings.Join(lines, "\n")
+}
+
+func hasReply(msg model.Message) bool {
+	return msg.Role == "assistant" && strings.TrimSpace(msg.Content) != ""
 }
 
 func userText(message model.Message) string {

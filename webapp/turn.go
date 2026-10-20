@@ -243,9 +243,6 @@ func trailLines(messages []model.Message) []trailLine {
 			lines = append(lines, trailLine{Kind: "result", Text: oneLine(m.Content, 140)})
 			continue
 		}
-		if text := oneLine(m.Content, 200); text != "" {
-			lines = append(lines, trailLine{Kind: "say", Text: text})
-		}
 		for _, call := range m.ToolCalls {
 			lines = append(lines, trailLine{Kind: "call", Text: call.Function.Name + " " + oneLine(call.Function.Arguments, 100)})
 		}
@@ -259,7 +256,7 @@ type liveView struct {
 	Thinking    string
 	ThinkingFor int
 	Thinks      bool
-	Trail       []trailLine
+	Steps       []messageView
 	HTML        template.HTML
 	Messages    []messageView
 	Err         string
@@ -278,7 +275,7 @@ func (s *Server) liveView(t *turn, st turnState) liveView {
 		Cancelled:   st.Cancelled,
 		Done:        st.Done,
 	}
-	v.Trail = trailLines(st.Trail)
+	v.Steps = messageViews(st.Trail, s.location)
 	if st.Done {
 		v.Messages = messageViews(st.Reply, s.location)
 	} else if st.Content != "" {

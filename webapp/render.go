@@ -148,9 +148,12 @@ var imageTypes = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
 func messageViews(messages []model.Message, loc *time.Location) []messageView {
 	now := time.Now().In(loc)
 	var views []messageView
-	for i, m := range messages {
+	for _, m := range messages {
 		if m.IsToolRound() {
-			if i == 0 || !messages[i-1].IsToolRound() {
+			if m.Role == "assistant" && strings.TrimSpace(m.Content) != "" {
+				views = append(views, messageView{Role: m.Role, Content: m.Content, HTML: renderMarkdown(m.Content), Time: newStamp(m.CreatedAt, now)})
+			}
+			if len(views) == 0 || views[len(views)-1].Role != "trail" {
 				views = append(views, messageView{Role: "trail"})
 			}
 			v := &views[len(views)-1]

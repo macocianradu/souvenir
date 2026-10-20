@@ -566,7 +566,6 @@ body.plain {
 .trail li.call { font-family: var(--mono); font-size: 12px; }
 .trail li.call::before { content: "⚙"; color: var(--accent); }
 .trail li.result::before { content: "↳"; }
-.trail li.say::before { content: "·"; }
 
 .pending { display: flex; gap: 6px; margin-left: 50px; padding: 8px 0; }
 

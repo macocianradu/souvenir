@@ -52,15 +52,15 @@
 
 {{define "live"}}<div class="turn" id="turn-{{.TurnId}}" data-turn="{{.TurnId}}"{{if not .Done}} data-stream="/turns/{{.TurnId}}/events"{{end}}>{{template "live-body" .}}</div>{{end}}
 
-{{define "live-body"}}{{if or .Memories .Thinking .Trail}}
+{{define "live-body"}}{{if or .Memories .Thinking}}
 <div class="activity">
   {{if .Memories}}<ul class="recalled" title="Remembered from earlier conversations">{{range .Memories}}<li>{{.}}</li>{{end}}</ul>{{end}}
   {{if .Thinking}}<details class="thinking"{{if .Thinks}} open{{end}}>
     <summary>{{if .Thinks}}<span class="pulse" aria-hidden="true"></span>Thinking{{else}}Thought for {{.ThinkingFor}}s{{end}}</summary>
     <div class="thought">{{.Thinking}}</div>
   </details>{{end}}
-  {{if .Trail}}<ul class="trail">{{range .Trail}}<li class="{{.Kind}}">{{.Text}}</li>{{end}}</ul>{{end}}
 </div>{{end}}
+{{range .Steps}}{{template "message" .}}{{end}}
 {{if .Done}}{{range .Messages}}{{template "message" .}}{{end}}
 {{else if .HTML}}<article class="msg assistant streaming">
   <span class="avatar-dot" aria-hidden="true"></span>
