@@ -282,3 +282,15 @@ func TestStream_MarksAReplyThatHitTheTokenLimit(t *testing.T) {
 		t.Fatalf("%+v", last)
 	}
 }
+
+func TestStream_KeepsReasoningUnderTheFieldItCameIn(t *testing.T) {
+	cl := newClient(t, sse(
+		`{"choices":[{"delta":{"reasoning_content":"look it "}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"up","content":"Done"}}]}`,
+		`[DONE]`))
+	ch, _ := cl.QueryStream(context.Background(), nil, nil)
+	final := collect(t, ch).last.Messages[0]
+	if final.ReasoningContent != "look it up" || final.Reasoning != "" || final.Content != "Done" {
+		t.Fatalf("%+v", final)
+	}
+}

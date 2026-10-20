@@ -7,14 +7,21 @@ import (
 )
 
 type Message struct {
-	Id         string     `json:"-"`
-	Seq        int        `json:"-"`
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Images     []Image    `json:"-"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallId string     `json:"tool_call_id,omitempty"`
-	CreatedAt  time.Time  `json:"-"`
+	Id               string     `json:"-"`
+	Seq              int        `json:"-"`
+	Role             string     `json:"role"`
+	Content          string     `json:"content"`
+	Images           []Image    `json:"-"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallId       string     `json:"tool_call_id,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	Reasoning        string     `json:"reasoning,omitempty"`
+	CreatedAt        time.Time  `json:"-"`
+}
+
+func (m Message) WithoutReasoning() Message {
+	m.ReasoningContent, m.Reasoning = "", ""
+	return m
 }
 
 type Image struct {

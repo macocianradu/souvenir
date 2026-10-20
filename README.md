@@ -27,6 +27,11 @@ a reply mid-stream and keeps what has arrived so far. Content and
 reasoning are separate events, so models that emit `reasoning_content` can have
 their thinking shown apart from the answer. Tool call fragments are accumulated
 by index across chunks and assembled into a complete message at the end.
+The reasoning behind a tool call is sent back with it on the following rounds
+of the same turn, under the field it arrived in (`reasoning_content` or
+`reasoning`), since thinking models such as GLM, Kimi and DeepSeek otherwise
+start over after every tool result. It is dropped once the turn ends and never
+stored.
 
 Tool calls run in a loop: the calls are dispatched locally, their results
 appended, and the model called again, up to `Llm.MaxToolRounds` rounds. The

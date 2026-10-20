@@ -103,7 +103,7 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var content strings.Builder
+	var content, reasoningContent, reasoning strings.Builder
 	toolAcc := map[int]*model.ToolCall{}
 	var order []int
 	truncated := false
@@ -142,8 +142,10 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 			truncated = true
 		}
 		delta := chunk.Choices[0].Delta
-		if reasoning := delta.ReasoningContent + delta.Reasoning + delta.Content.Thinking; reasoning != "" {
-			if !send(StreamEvent{Reasoning: reasoning}) {
+		reasoningContent.WriteString(delta.ReasoningContent)
+		reasoning.WriteString(delta.Reasoning)
+		if thinking := delta.ReasoningContent + delta.Reasoning + delta.Content.Thinking; thinking != "" {
+			if !send(StreamEvent{Reasoning: thinking}) {
 				return
 			}
 		}
@@ -180,7 +182,8 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 		return
 	}
 
-	final := model.Message{Role: "assistant", Content: content.String()}
+	final := model.Message{Role: "assistant", Content: content.String(),
+		ReasoningContent: reasoningContent.String(), Reasoning: reasoning.String()}
 	for _, idx := range order {
 		final.ToolCalls = append(final.ToolCalls, *toolAcc[idx])
 	}
