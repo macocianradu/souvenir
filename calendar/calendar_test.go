@@ -246,7 +246,7 @@ func TestWrite_AcceptsSecondsAndOffsets(t *testing.T) {
 	s := newStore(t, nil)
 	brussels, _ := time.LoadLocation("Europe/Brussels")
 	want := time.Date(2026, 10, 15, 20, 0, 0, 0, brussels)
-	for _, start := range []string{"2026-10-15T20:00", "2026-10-15T20:00:00", "2026-10-15 20:00", "2026-10-15T20:00:00+02:00", "2026-10-15T18:00:00Z"} {
+	for _, start := range []string{"2026-10-15T20:00", "2026-10-15T20:00:00", "2026-10-15 20:00", "2026-10-15T20:00:00+02:00", "2026-10-15T18:00:00Z", "2026-10-15T13:00-05:00", "2026-10-15T18:00Z"} {
 		summary := "Match"
 		ev, err := s.Create("assistant", Changes{Summary: &summary, Start: &start})
 		if err != nil {

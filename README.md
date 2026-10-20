@@ -301,7 +301,9 @@ The lists can be set from the environment as comma separated values
 (`SOUV__calendars__read=home,work`).
 
 `Timezone` is the IANA zone the model's times are read and shown in, and the
-zone new events are written with (plus a matching `VTIMEZONE`). Left out, the
+zone new events are written with (plus a matching `VTIMEZONE`). A time can
+also carry a UTC offset (`2026-10-23T12:00-05:00`), so the model can copy a
+time from another zone instead of converting it, daylight saving included. Left out, the
 process's local zone is used and new events are written in UTC. The same zone
 is used for the current date and time the model is given on every turn.
 

@@ -13,7 +13,9 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 )
 
-const timeHelp = "YYYY-MM-DDTHH:MM in the user's timezone, or YYYY-MM-DD for an all-day event"
+const timeHelp = "YYYY-MM-DDTHH:MM in the user's timezone, or YYYY-MM-DD for an all-day event. " +
+	"A time from another zone can be given as is with its UTC offset, such as 2026-10-23T12:00-05:00, " +
+	"rather than converted"
 
 func CalendarTools(base *calendar.Store) Provider {
 	return Provider{
@@ -178,7 +180,7 @@ func calendarTools(store *calendar.Store) []Tool {
 			Name:      "calendar_create",
 			Sensitive: true,
 			Description: "Add an event to one of the user's calendars. Without an end, a timed event lasts an " +
-				"hour and an all-day event one day. Times are in " + zone + ".",
+				"hour and an all-day event one day. Times are in " + zone + " unless given with an offset.",
 			Parameters: json.RawMessage(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {

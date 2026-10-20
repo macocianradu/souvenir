@@ -15,8 +15,9 @@ func WebSearch(searcher web.Searcher) Tool {
 		Name:      "web_search",
 		Untrusted: true,
 		Description: "Search the web. Use it for current events, facts you are unsure of, or anything " +
-			"that may have changed since your training. Returns titles, links and short snippets; " +
-			"cite the links you rely on.",
+			"that may have changed since your training. For recent news, try news_list first when it is offered. " +
+			"Returns titles, links and short snippets; cite the links you rely on. When a search finds " +
+			"nothing, try fewer and broader words.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {

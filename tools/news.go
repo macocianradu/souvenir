@@ -70,7 +70,8 @@ func newsTools(client *news.Client) []Tool {
 			Name:      "news_list",
 			Untrusted: true,
 			Description: "List entries from the user's subscribed news feeds, newest first, with a short excerpt. " +
-				"Use it for \"what's new\", a summary of the news, or what a feed or category has published lately. " +
+				"Use it for \"what's new\", a summary of the news, or what a feed or category has published lately, " +
+				"and try it before web_search for recent news on a topic. " +
 				"Read one entry in full with news_get.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
