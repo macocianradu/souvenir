@@ -99,7 +99,8 @@ func (t *turn) run(ctx context.Context) error {
 	t.recall(ctx)
 	toolCtx := tools.WithTurn(tools.WithConversation(ctx, t.conv.Id))
 	for rounds := 0; ; rounds++ {
-		messages, err := t.stream(ctx)
+		answer := tools.Refused(toolCtx)
+		messages, err := t.stream(ctx, answer)
 		if err != nil || ctx.Err() != nil {
 			return err
 		}
@@ -110,7 +111,7 @@ func (t *turn) run(ctx context.Context) error {
 				break
 			}
 		}
-		if request == nil {
+		if request == nil || answer {
 			t.send(ctx, Event{Reply: messages})
 			return nil
 		}
@@ -149,8 +150,12 @@ func (t *turn) recall(ctx context.Context) {
 	}
 }
 
-func (t *turn) stream(ctx context.Context) ([]model.Message, error) {
-	ch, err := t.client.QueryStream(ctx, t.context(), t.agent.tools.Specs(ctx))
+func (t *turn) stream(ctx context.Context, answer bool) ([]model.Message, error) {
+	query := t.client.QueryStream
+	if answer {
+		query = t.client.AnswerStream
+	}
+	ch, err := query(ctx, t.context(), t.agent.tools.Specs(ctx))
 	if err != nil {
 		return nil, err
 	}

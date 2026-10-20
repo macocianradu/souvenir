@@ -29,10 +29,20 @@ func (t Tool) Summary() string {
 
 var closingTag = regexp.MustCompile(`(?i)<\s*/\s*untrusted\s*>`)
 
-type taintKey struct{}
+type turnKey struct{}
+
+type turnState struct {
+	tainted bool
+	refused bool
+}
 
 func WithTurn(ctx context.Context) context.Context {
-	return context.WithValue(ctx, taintKey{}, new(bool))
+	return context.WithValue(ctx, turnKey{}, &turnState{})
+}
+
+func Refused(ctx context.Context) bool {
+	state, _ := ctx.Value(turnKey{}).(*turnState)
+	return state != nil && state.refused
 }
 
 type Provider struct {
@@ -116,15 +126,16 @@ func (r *Registry) Call(ctx context.Context, call model.ToolCall) model.Message 
 		result.Content = "Error: arguments are not valid JSON"
 		return result
 	}
-	tainted, _ := ctx.Value(taintKey{}).(*bool)
-	if tool.Sensitive && tainted != nil && *tainted {
+	state, _ := ctx.Value(turnKey{}).(*turnState)
+	if tool.Sensitive && state != nil && state.tainted {
 		r.logger.Warn("Refused a sensitive tool after untrusted content", "name", tool.Name)
+		state.refused = true
 		result.Content = "Error: refused, because untrusted content was read earlier in this turn. " +
 			"Tell the user what you would do and ask them to confirm in their next message."
 		return result
 	}
-	if tool.Untrusted && tainted != nil {
-		*tainted = true
+	if tool.Untrusted && state != nil {
+		state.tainted = true
 	}
 	r.logger.Debug("Running tool", "name", tool.Name, "args", string(args))
 	out, err := tool.Run(ctx, args)

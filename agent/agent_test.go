@@ -160,3 +160,42 @@ func TestRun_UntrustedContentBlocksSensitiveToolsForTheRestOfTheTurn(t *testing.
 		t.Fatalf("the next turn starts clean: %q", got)
 	}
 }
+
+func TestRun_ARefusalLeavesTheModelToAnswerTheUser(t *testing.T) {
+	var choices []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.ChatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		choices = append(choices, req.ToolChoice)
+		name := "read"
+		if len(choices) > 1 {
+			name = "write"
+		}
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_%d\",\"function\":{\"name\":%q,\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n", len(choices), name)
+	}))
+	t.Cleanup(srv.Close)
+	client := *llm.NewLLMClient(config.Config{
+		Api: config.ApiConfig{Url: srv.URL, Timeout: 1000},
+		Llm: config.LLMConfig{MaxToolRounds: 10},
+	})
+	writes := 0
+	a := New(tools.NewRegistry(
+		tools.Tool{Name: "read", Untrusted: true, Run: func(context.Context, json.RawMessage) (string, error) {
+			return "page", nil
+		}},
+		tools.Tool{Name: "write", Sensitive: true, Run: func(context.Context, json.RawMessage) (string, error) {
+			writes++
+			return "done", nil
+		}},
+	), nil, nil)
+	var last Event
+	for ev := range a.Run(context.Background(), client, conversation()) {
+		last = ev
+	}
+	if last.Err != nil || last.Reply == nil {
+		t.Fatalf("last event %+v", last)
+	}
+	if strings.Join(choices, ",") != ",,none" || writes != 0 {
+		t.Fatalf("tool choices %q, %d writes", choices, writes)
+	}
+}

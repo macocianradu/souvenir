@@ -58,7 +58,9 @@ or sensitive (`memory_save`, `memory_update`, `memory_forget`,
 wrapped in `<untrusted source="...">` tags the model is told never to take
 instructions from, and once an untrusted tool has run, sensitive calls are
 refused for the rest of that turn: the model says what it would do and the user
-confirms in their next message. Calendar reads are not marked untrusted, since
+confirms in their next message. After a refusal the model gets one more round
+with tool calls turned off (`tool_choice: "none"`), so it has to answer rather
+than keep searching. Calendar reads are not marked untrusted, since
 changing an event needs its uid from a read first.
 
 `search_history` runs the same hybrid search as the `/history` search over every

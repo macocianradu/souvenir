@@ -50,7 +50,19 @@ type ToolCallDelta struct {
 }
 
 func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message, tools []ToolSpec) (<-chan StreamEvent, error) {
-	requestBody := ChatRequest{
+	return cl.CallStream(ctx, cl.streamRequest(messages, tools))
+}
+
+func (cl ChatClient) AnswerStream(ctx context.Context, messages []model.Message, tools []ToolSpec) (<-chan StreamEvent, error) {
+	requestBody := cl.streamRequest(messages, tools)
+	if len(tools) > 0 {
+		requestBody.ToolChoice = "none"
+	}
+	return cl.CallStream(ctx, requestBody)
+}
+
+func (cl ChatClient) streamRequest(messages []model.Message, tools []ToolSpec) ChatRequest {
+	return ChatRequest{
 		Model:       cl.Cfg.Llm.Model,
 		Messages:    messages,
 		Tools:       tools,
@@ -59,11 +71,8 @@ func (cl ChatClient) QueryStream(ctx context.Context, messages []model.Message, 
 		Temperature: cl.Cfg.Llm.Temperature,
 		Kwargs:      cl.templateKwargs(true),
 	}
-	return cl.CallStream(ctx, requestBody)
 }
 
-// CallStream starts a streaming request. Cancelling ctx aborts the request
-// and closes the returned channel.
 func (cl ChatClient) CallStream(ctx context.Context, requestBody ChatRequest) (<-chan StreamEvent, error) {
 	resp, err := cl.CallApi(ctx, requestBody)
 	if err != nil {
