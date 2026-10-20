@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -17,7 +18,10 @@ import (
 
 const recallTimeout = 3 * time.Second
 
-var ErrToolLimit = errors.New("tool call limit reached")
+var (
+	ErrToolLimit = errors.New("tool call limit reached")
+	ErrCutOff    = errors.New("reply cut off")
+)
 
 // Event is one step of a turn. The channel closes after an event with Reply
 // or Err, or without either once the turn's context is cancelled.
@@ -164,6 +168,9 @@ func (t *turn) stream(ctx context.Context, answer bool) ([]model.Message, error)
 			return nil, ev.Err
 		}
 		if ev.Done {
+			if ev.Truncated {
+				return nil, t.cutOff()
+			}
 			return ev.Messages, nil
 		}
 		if !t.send(ctx, Event{Reasoning: ev.Reasoning, Content: ev.Content}) {
@@ -171,6 +178,13 @@ func (t *turn) stream(ctx context.Context, answer bool) ([]model.Message, error)
 		}
 	}
 	return nil, nil
+}
+
+func (t *turn) cutOff() error {
+	if limit := t.client.Cfg.Llm.MaxTokens; limit > 0 {
+		return fmt.Errorf("%w at %d tokens (Llm.MaxTokens)", ErrCutOff, limit)
+	}
+	return fmt.Errorf("%w by the provider's token limit", ErrCutOff)
 }
 
 func (t *turn) context() []model.Message {

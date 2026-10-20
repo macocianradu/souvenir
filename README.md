@@ -232,7 +232,8 @@ terminal, so an entry without a target writes to `souvenir.log`.
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
   "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false,
-                 "MaxToolRounds": 28, "ContextBudget": 12000, "KeepRecent": 8,
+                 "MaxToolRounds": 28, "MaxTokens": 4096,
+                 "ContextBudget": 12000, "KeepRecent": 8,
                  "MemoryRecall": 5 },
   "Db":        { "Url": "localhost", "Port": "5432", "DbName": "souvenir",
                  "User": "...", "Password": "...",
@@ -337,6 +338,12 @@ model chooses a query but never a path. These APIs have no auth of their own,
 so keep them off networks where anything less careful can reach them. Only the
 users named in `Users` are offered the tools. `Timeout` is in milliseconds
 (default 15000).
+
+`Llm.MaxTokens` caps each reply, reasoning included on most providers; 0
+leaves it to the provider. A reply that hits the cap ends the turn with an
+error, keeping the text that arrived, and its tool calls are not run, since
+their arguments may be cut off too. Models that think at length need more than
+the default.
 
 `Llm.Thinking` sets llama.cpp's `enable_thinking` template argument. Leave it
 out for other servers: nothing server specific is sent unless it is set.

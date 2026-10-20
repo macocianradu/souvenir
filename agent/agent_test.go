@@ -199,3 +199,24 @@ func TestRun_ARefusalLeavesTheModelToAnswerTheUser(t *testing.T) {
 		t.Fatalf("tool choices %q, %d writes", choices, writes)
 	}
 }
+
+func TestRun_AReplyCutOffAtTheTokenLimitRunsNoTools(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_0\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"uid\\\": \\\"SGU\"}}]}}]}\n\n"+
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	client := *llm.NewLLMClient(config.Config{
+		Api: config.ApiConfig{Url: srv.URL, Timeout: 1000},
+		Llm: config.LLMConfig{MaxToolRounds: 2, MaxTokens: 4096},
+	})
+	var last Event
+	ran := 0
+	for ev := range echoAgent().Run(context.Background(), client, conversation()) {
+		ran += len(ev.Trail)
+		last = ev
+	}
+	if !errors.Is(last.Err, ErrCutOff) || !strings.Contains(last.Err.Error(), "4096") || ran != 0 {
+		t.Fatalf("last event %+v, %d trail messages", last, ran)
+	}
+}

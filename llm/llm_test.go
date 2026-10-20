@@ -271,3 +271,14 @@ func TestCall_ReadsMistralContentChunks(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestStream_MarksAReplyThatHitTheTokenLimit(t *testing.T) {
+	cl := newClient(t, sse(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\"q\":"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+		`[DONE]`))
+	ch, _ := cl.QueryStream(context.Background(), nil, nil)
+	if last := collect(t, ch).last; !last.Done || !last.Truncated {
+		t.Fatalf("%+v", last)
+	}
+}

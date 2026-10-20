@@ -16,6 +16,7 @@ type StreamEvent struct {
 	Content   string
 	Messages  []model.Message
 	Done      bool
+	Truncated bool
 	Err       error
 }
 
@@ -105,6 +106,7 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 	var content strings.Builder
 	toolAcc := map[int]*model.ToolCall{}
 	var order []int
+	truncated := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -136,6 +138,9 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 			continue
 		}
 
+		if reason := chunk.Choices[0].FinishReason; reason != nil && *reason == "length" {
+			truncated = true
+		}
 		delta := chunk.Choices[0].Delta
 		if reasoning := delta.ReasoningContent + delta.Reasoning + delta.Content.Thinking; reasoning != "" {
 			if !send(StreamEvent{Reasoning: reasoning}) {
@@ -180,5 +185,5 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 		final.ToolCalls = append(final.ToolCalls, *toolAcc[idx])
 	}
 
-	send(StreamEvent{Done: true, Messages: []model.Message{final}})
+	send(StreamEvent{Done: true, Truncated: truncated, Messages: []model.Message{final}})
 }
