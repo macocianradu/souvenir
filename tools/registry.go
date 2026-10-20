@@ -130,8 +130,9 @@ func (r *Registry) Call(ctx context.Context, call model.ToolCall) model.Message 
 	if tool.Sensitive && state != nil && state.tainted {
 		r.logger.Warn("Refused a sensitive tool after untrusted content", "name", tool.Name)
 		state.refused = true
-		result.Content = "Error: refused, because untrusted content was read earlier in this turn. " +
-			"Tell the user what you would do and ask them to confirm in their next message."
+		result.Content = model.Held + ", because untrusted content was read earlier in this turn. The user " +
+			"is shown this call with its arguments and can approve it: tell them in one line what it would do, " +
+			"and do not call it again."
 		return result
 	}
 	if tool.Untrusted && state != nil {
@@ -149,4 +150,13 @@ func (r *Registry) Call(ctx context.Context, call model.ToolCall) model.Message 
 	}
 	result.Content = out
 	return result
+}
+
+func (r *Registry) Sensitive(ctx context.Context, name string) bool {
+	for _, t := range r.Tools(ctx) {
+		if t.Name == name {
+			return t.Sensitive
+		}
+	}
+	return false
 }

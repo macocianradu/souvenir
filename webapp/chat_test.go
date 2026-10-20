@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -569,5 +570,69 @@ func TestDelete_RemovesTheConversationButNotWhileReplying(t *testing.T) {
 	}
 	if w := h.get(dana, "/c/"+open.Id); w.Code != http.StatusNotFound {
 		t.Errorf("the deleted conversation still opens: %d", w.Code)
+	}
+}
+
+func TestHeld_ReviewShowsEachCallAndAppliesOnlyTheChosenOnes(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	create := func(id, summary string) model.ToolCall {
+		args, _ := json.Marshal(map[string]string{"calendar": "assistant", "summary": summary, "start": "2026-10-23T12:00-05:00"})
+		return model.ToolCall{Id: id, Type: "function", Function: model.FunctionCall{Name: "calendar_create", Arguments: string(args)}}
+	}
+	held := model.Held + ", because untrusted content was read earlier in this turn."
+	conv, err := h.history.SaveConversation(ctx, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "add the matches", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{create("c1", "Gen.G vs IG"), create("c2", "HLE vs TES")}, Seq: 2},
+		{Role: "tool", ToolCallId: "c1", Content: held, Seq: 3},
+		{Role: "tool", ToolCallId: "c2", Content: held, Seq: 4},
+		{Role: "assistant", Content: "I'd add two matches.", Seq: 5},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := h.history.GetConversation(ctx, conv.Id)
+	first, second := stored.Messages[2].Id, stored.Messages[3].Id
+
+	page := h.get(dana, "/c/"+conv.Id).Body.String()
+	for _, want := range []string{`hx-post="/c/` + conv.Id + `/held"`, "calendar_create", "<dt>summary</dt><dd>Gen.G vs IG</dd>",
+		"<dd>2026-10-23T12:00-05:00</dd>", `value="` + first + `"`, `value="` + second + `"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the review lacks %q:\n%s", want, page)
+		}
+	}
+	if w := h.post(h.as("erin"), "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first}}); w.Code != http.StatusNotFound {
+		t.Fatalf("erin resolved dana's calls: %d", w.Code)
+	}
+
+	w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first}})
+	if body := w.Body.String(); w.Code != http.StatusOK || !strings.Contains(body, "Created:") || !strings.Contains(body, model.Rejected) {
+		t.Fatalf("%d\n%s", w.Code, body)
+	}
+	events, _ := filepath.Glob(filepath.Join(h.calendarRoot, "dana", "assistant", "*.ics"))
+	if len(events) != 1 {
+		t.Fatalf("%d events written, want 1", len(events))
+	}
+	if w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first, second}}); w.Code != http.StatusConflict {
+		t.Fatalf("resolving again answered %d", w.Code)
+	}
+	if page := h.get(dana, "/c/"+conv.Id).Body.String(); strings.Contains(page, "/held\"") {
+		t.Fatal("the review is still offered after resolving")
+	}
+	after, _ := h.history.GetConversation(ctx, conv.Id)
+	if !strings.HasPrefix(after.Messages[2].Content, model.Approved+"Created:") || after.Messages[3].Content != model.Rejected {
+		t.Fatalf("stored results %q, %q", after.Messages[2].Content, after.Messages[3].Content)
+	}
+}
+
+func TestCallArgs_KeepTheModelsOrderAndUnquoteStrings(t *testing.T) {
+	got := callArgs(`{"summary":"Final","start":"2026-11-14T20:00","exceptions":["2026-11-21"],"n":3}`)
+	want := []heldArg{{"summary", "Final"}, {"start", "2026-11-14T20:00"}, {"exceptions", `["2026-11-21"]`}, {"n", "3"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("%v", got)
+	}
+	if got := callArgs(`not json`); len(got) != 1 || got[0].Key != "" || got[0].Value != "not json" {
+		t.Fatalf("%v", got)
 	}
 }

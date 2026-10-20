@@ -35,6 +35,7 @@ type turnState struct {
 	Trail         []model.Message
 	Content       string
 	Reply         []model.Message
+	Held          *heldView
 	Err           string
 	Cancelled     bool
 	Done          bool
@@ -185,8 +186,17 @@ func (s *Server) runTurn(ctx context.Context, t *turn, client llm.ChatClient, co
 		// The saved copies carry the time the reply was saved at.
 		reply = saved.Messages[len(saved.Messages)-len(reply):]
 	}
+	var held *heldView
+	if hasHeld(conv.Messages) {
+		if stored, err := s.app.History.GetConversation(saveCtx, conv.Id); err != nil {
+			s.logger.Error("Could not load the held calls", "conversation", conv.Id, "error", err)
+		} else {
+			held = heldCalls(stored)
+		}
+	}
 	t.update(func(st *turnState) {
 		st.Reply = reply
+		st.Held = held
 		st.Content = ""
 		st.Cancelled = ctx.Err() != nil && st.Err == ""
 		st.Done = true
@@ -259,6 +269,7 @@ type liveView struct {
 	Steps       []messageView
 	HTML        template.HTML
 	Messages    []messageView
+	Held        *heldView
 	Err         string
 	Cancelled   bool
 	Done        bool
@@ -278,6 +289,7 @@ func (s *Server) liveView(t *turn, st turnState) liveView {
 	v.Steps = messageViews(st.Trail, s.location)
 	if st.Done {
 		v.Messages = messageViews(st.Reply, s.location)
+		v.Held = st.Held
 	} else if st.Content != "" {
 		v.HTML = renderMarkdown(st.Content)
 	}

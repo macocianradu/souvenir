@@ -66,19 +66,67 @@ func (a *Agent) Run(ctx context.Context, client llm.ChatClient, conv model.Conve
 	events := make(chan Event)
 	go func() {
 		defer close(events)
-		if a.settings != nil {
-			chosen, err := a.settings.Get(ctx)
-			if err != nil {
-				a.logger.Warn("Could not read the user's settings, using the defaults", "error", err)
-			}
-			ctx = settings.WithSettings(ctx, chosen)
-		}
+		ctx = a.withSettings(ctx)
 		t := turn{agent: a, client: client, conv: conv, events: events}
 		if err := t.run(ctx); err != nil && ctx.Err() == nil {
 			t.send(ctx, Event{Err: err})
 		}
 	}()
 	return events
+}
+
+func (a *Agent) withSettings(ctx context.Context) context.Context {
+	if a.settings == nil {
+		return ctx
+	}
+	chosen, err := a.settings.Get(ctx)
+	if err != nil {
+		a.logger.Warn("Could not read the user's settings, using the defaults", "error", err)
+	}
+	return settings.WithSettings(ctx, chosen)
+}
+
+type ToolResults interface {
+	ReplaceToolResult(ctx context.Context, conversationId, messageId, prefix, content string) (bool, error)
+}
+
+func (a *Agent) Resolve(ctx context.Context, results ToolResults, conv model.Conversation, approved []string) ([]model.Message, error) {
+	ctx = a.withSettings(ctx)
+	toolCtx := tools.WithTurn(tools.WithConversation(ctx, conv.Id))
+	var resolved []model.Message
+	for _, held := range model.HeldCalls(conv.Messages) {
+		m := held.Result
+		if !slices.Contains(approved, m.Id) {
+			ok, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Held, model.Rejected)
+			if err != nil {
+				return resolved, err
+			}
+			if ok {
+				m.Content = model.Rejected
+				resolved = append(resolved, m)
+			}
+			continue
+		}
+		ok, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Held, model.Running)
+		if err != nil {
+			return resolved, err
+		}
+		if !ok {
+			continue
+		}
+		name := held.Call.Function.Name
+		content := "Error: not run, " + name + " does not wait for approval."
+		if a.tools.Sensitive(ctx, name) {
+			a.logger.Info("Running an approved tool call", "name", name)
+			content = model.Approved + a.tools.Call(toolCtx, held.Call).Content
+		}
+		if _, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Running, content); err != nil {
+			return resolved, err
+		}
+		m.Content = content
+		resolved = append(resolved, m)
+	}
+	return resolved, nil
 }
 
 type turn struct {

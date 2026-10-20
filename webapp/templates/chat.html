@@ -35,6 +35,7 @@
         <div id="thread">
           {{range .Messages}}{{template "message" .}}{{end}}
           {{with .Live}}{{template "live" .}}{{end}}
+          {{with .Held}}{{template "held" .}}{{end}}
         </div>
       </div>
     </section>

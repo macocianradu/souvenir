@@ -111,7 +111,7 @@ func TestCall_RefusesSensitiveToolsAfterUntrustedContentInTheSameTurn(t *testing
 		t.Fatalf("before anything untrusted, a sensitive tool runs: %+v", got)
 	}
 	r.Call(ctx, call("read_web", "{}"))
-	if got := r.Call(ctx, call("write", "{}")); !strings.HasPrefix(got.Content, "Error: refused") {
+	if got := r.Call(ctx, call("write", "{}")); !strings.HasPrefix(got.Content, model.Held) {
 		t.Fatalf("after untrusted content, a sensitive tool is refused: %+v", got)
 	}
 	if got := r.Call(ctx, call("plain", "{}")); got.Content != "plain" {

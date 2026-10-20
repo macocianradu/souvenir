@@ -90,6 +90,7 @@ type chatPage struct {
 	Heading      headingView
 	Messages     []messageView
 	Live         *liveView
+	Held         *heldView
 	Sidebar      sidebarView
 	Models       []string
 	Model        string
@@ -125,6 +126,8 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		st, _ := t.snapshot()
 		live := s.liveView(t, st)
 		p.Live = &live
+	} else {
+		p.Held = heldCalls(conv)
 	}
 	s.render(w, http.StatusOK, "chat", p)
 }

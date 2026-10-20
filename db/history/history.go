@@ -172,6 +172,26 @@ func (cl DbClient) SetTitle(ctx context.Context, id, title, source string) error
 	return nil
 }
 
+func (cl DbClient) ReplaceToolResult(ctx context.Context, conversationId, messageId, prefix, content string) (bool, error) {
+	userId, err := users.Id(ctx)
+	if err != nil {
+		return false, err
+	}
+	tag, err := cl.pool.Exec(ctx,
+		`
+		UPDATE messages m
+		   SET content = $1
+		  FROM conversations c
+		 WHERE m.id = $2 AND m.conversation_id = $3 AND m.role = 'tool' AND starts_with(m.content, $4)
+		   AND c.id = m.conversation_id AND c.user_id = $5
+		`, content, messageId, conversationId, prefix, userId)
+	if err != nil {
+		cl.logger.Error("Could not replace the tool result", "conversation", conversationId, "message", messageId, "error", err)
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 func (cl DbClient) SaveContextSummary(ctx context.Context, conversationId string, summary model.ContextSummary) error {
 	userId, err := users.Id(ctx)
 	if err != nil {

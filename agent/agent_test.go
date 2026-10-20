@@ -154,7 +154,7 @@ func TestRun_UntrustedContentBlocksSensitiveToolsForTheRestOfTheTurn(t *testing.
 		return out
 	}
 	got := results(scriptServer(t, "write", "read", "write"))
-	if len(got) != 3 || got[0] != "done" || !strings.HasPrefix(got[2], "Error: refused") || writes != 1 {
+	if len(got) != 3 || got[0] != "done" || !strings.HasPrefix(got[2], model.Held) || writes != 1 {
 		t.Fatalf("results %q, %d writes", got, writes)
 	}
 	if got := results(scriptServer(t, "write")); len(got) != 1 || got[0] != "done" {
@@ -253,5 +253,57 @@ func TestRun_ReasoningGoesBackWithinTheTurnButNotOutOfIt(t *testing.T) {
 		if m.ReasoningContent != "" || m.Reasoning != "" {
 			t.Fatalf("reasoning left the turn: %+v", m)
 		}
+	}
+}
+
+type memoryResults map[string]string
+
+func (m memoryResults) ReplaceToolResult(_ context.Context, _, messageId, prefix, content string) (bool, error) {
+	current, ok := m[messageId]
+	if !ok || !strings.HasPrefix(current, prefix) {
+		return false, nil
+	}
+	m[messageId] = content
+	return true, nil
+}
+
+func TestResolve_RunsOnlyApprovedSensitiveCallsOnce(t *testing.T) {
+	var wrote []string
+	var read bool
+	a := New(tools.NewRegistry(
+		tools.Tool{Name: "write", Sensitive: true, Run: func(_ context.Context, args json.RawMessage) (string, error) {
+			wrote = append(wrote, string(args))
+			return "done", nil
+		}},
+		tools.Tool{Name: "read", Untrusted: true, Run: func(context.Context, json.RawMessage) (string, error) {
+			read = true
+			return "page", nil
+		}},
+	), nil, nil)
+	call := func(id, name, args string) model.ToolCall {
+		return model.ToolCall{Id: id, Function: model.FunctionCall{Name: name, Arguments: args}}
+	}
+	held := model.Held + ", because…"
+	conv := model.Conversation{Id: "c", Messages: []model.Message{
+		{Role: "user", Content: "add both"},
+		{Role: "assistant", ToolCalls: []model.ToolCall{call("1", "write", `{"n":1}`), call("2", "write", `{"n":2}`), call("3", "read", `{}`)}},
+		{Id: "m1", Role: "tool", ToolCallId: "1", Content: held},
+		{Id: "m2", Role: "tool", ToolCallId: "2", Content: held},
+		{Id: "m3", Role: "tool", ToolCallId: "3", Content: held},
+	}}
+	store := memoryResults{"m1": held, "m2": held, "m3": held}
+
+	resolved, err := a.Resolve(context.Background(), store, conv, []string{"m1", "m3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved) != 3 || strings.Join(wrote, ",") != `{"n":1}` || read {
+		t.Fatalf("resolved %+v, wrote %v, read %v", resolved, wrote, read)
+	}
+	if store["m1"] != model.Approved+"done" || store["m2"] != model.Rejected || !strings.Contains(store["m3"], "does not wait for approval") {
+		t.Fatalf("stored %q", store)
+	}
+	if again, _ := a.Resolve(context.Background(), store, conv, []string{"m1", "m2"}); len(again) != 0 || len(wrote) != 1 {
+		t.Fatalf("resolved twice: %+v, wrote %v", again, wrote)
 	}
 }

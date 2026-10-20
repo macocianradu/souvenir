@@ -159,3 +159,45 @@ func TestToolRounds_SurviveARoundTrip(t *testing.T) {
 		t.Fatalf("%+v", got.Messages)
 	}
 }
+
+func TestReplaceToolResult_OnlyOnceAndOnlyForTheOwner(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	accounts := users.NewStore(pool)
+	alice, err := accounts.Add(ctx, "carol", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := accounts.Add(ctx, "dave", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asAlice, asBob := users.WithUser(ctx, alice), users.WithUser(ctx, bob)
+	hist := history.New(pool, config.DbConfig{ChunkSize: 50, ChunkOverlap: 10})
+	call := model.ToolCall{Id: "call_1", Type: "function", Function: model.FunctionCall{Name: "calendar_create", Arguments: `{}`}}
+	conv, err := hist.SaveConversation(asAlice, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "add it", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{call}, Seq: 2},
+		{Role: "tool", ToolCallId: "call_1", Content: model.Held + ", because…", Seq: 3},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := hist.GetConversation(asAlice, conv.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := saved.Messages[2].Id
+	if ok, _ := hist.ReplaceToolResult(asBob, conv.Id, id, model.Held, model.Running); ok {
+		t.Fatal("dave replaced carol's tool result")
+	}
+	if ok, err := hist.ReplaceToolResult(asAlice, conv.Id, id, model.Held, model.Running); !ok || err != nil {
+		t.Fatal("the owner could not claim the held call", err)
+	}
+	if ok, _ := hist.ReplaceToolResult(asAlice, conv.Id, id, model.Held, model.Running); ok {
+		t.Fatal("a held call was claimed twice")
+	}
+	if ok, _ := hist.ReplaceToolResult(asAlice, conv.Id, saved.Messages[0].Id, "", "x"); ok {
+		t.Fatal("a user message was rewritten")
+	}
+}

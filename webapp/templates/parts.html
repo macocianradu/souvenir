@@ -62,6 +62,7 @@
 </div>{{end}}
 {{range .Steps}}{{template "message" .}}{{end}}
 {{if .Done}}{{range .Messages}}{{template "message" .}}{{end}}
+{{with .Held}}{{template "held" .}}{{end}}
 {{else if .HTML}}<article class="msg assistant streaming">
   <span class="avatar-dot" aria-hidden="true"></span>
   <div class="body"><div class="md">{{.HTML}}</div></div>
@@ -94,3 +95,30 @@
 {{template "heading" .Heading}}
 <input type="hidden" name="conversation" id="conversation-id" value="{{.NewId}}" hx-swap-oob="true">{{end}}
 <nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>{{end}}
+
+{{define "held"}}{{if .Resolved}}<section class="held resolved">
+  <h3>{{if .Calls}}Done{{else}}Nothing changed{{end}}</h3>
+  <ol class="held-calls">{{range .Calls}}
+    <li class="{{if .Failed}}failed{{else}}ran{{end}}">
+      <code class="tool">{{.Name}}</code>
+      {{template "held-args" .Args}}
+      <p class="outcome">{{.Result}}</p>
+    </li>{{end}}
+  </ol>
+  {{if .Err}}<p class="note error">{{.Err}}</p>{{end}}
+</section>{{else}}<form class="held" hx-post="/c/{{.ConversationId}}/held" hx-swap="outerHTML">
+  <h3>Waiting for your approval</h3>
+  <p class="muted">The assistant read web, news or log content in this reply, so these changes were held for you to check.</p>
+  <ol class="held-calls">{{range .Calls}}
+    <li>
+      <label><input type="checkbox" name="approve" value="{{.Id}}" checked> <code class="tool">{{.Name}}</code></label>
+      {{template "held-args" .Args}}
+    </li>{{end}}
+  </ol>
+  <div class="held-actions">
+    <button class="button primary" type="submit" name="decision" value="apply">Apply selected</button>
+    <button class="button" type="submit" name="decision" value="reject">Reject all</button>
+  </div>
+</form>{{end}}{{end}}
+
+{{define "held-args"}}{{if .}}<dl class="args">{{range .}}{{if .Key}}<dt>{{.Key}}</dt>{{end}}<dd>{{.Value}}</dd>{{end}}</dl>{{end}}{{end}}

@@ -31,3 +31,25 @@ func TestAnswerToolCalls_FillsMissingResultsAndDropsOrphans(t *testing.T) {
 		t.Fatalf("results: %q, %q", got[2].Content, got[3].Content)
 	}
 }
+
+func TestHeldCalls_OnlySinceTheLastUserMessage(t *testing.T) {
+	call := func(id string) ToolCall { return ToolCall{Id: id, Function: FunctionCall{Name: "calendar_create"}} }
+	messages := []Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", ToolCalls: []ToolCall{call("old")}},
+		{Role: "tool", ToolCallId: "old", Content: Held + "…"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", ToolCalls: []ToolCall{call("a"), call("b"), call("c")}},
+		{Role: "tool", ToolCallId: "a", Content: Held + "…"},
+		{Role: "tool", ToolCallId: "b", Content: "Created: …"},
+		{Role: "tool", ToolCallId: "c", Content: Held + "…"},
+		{Role: "tool", ToolCallId: "stray", Content: Held + "…"},
+	}
+	held := HeldCalls(messages)
+	if len(held) != 2 || held[0].Call.Id != "a" || held[1].Call.Id != "c" || held[1].Result.ToolCallId != "c" {
+		t.Fatalf("%+v", held)
+	}
+	if got := HeldCalls(append(messages, Message{Role: "user", Content: "never mind"})); len(got) != 0 {
+		t.Fatalf("calls before the last user message are still held: %+v", got)
+	}
+}

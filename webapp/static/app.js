@@ -159,6 +159,7 @@ function stream(turn) {
     box.innerHTML = e.data;
     const final = box.firstElementChild;
     replace(turn, final ? final.innerHTML : "");
+    htmx.process(turn);
     delete turn.dataset.stream;
     setBusy(null);
   });

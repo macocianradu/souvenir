@@ -62,10 +62,15 @@ or sensitive (`memory_save`, `memory_update`, `memory_forget`,
 `calendar_create`, `calendar_update`, `calendar_delete`). Untrusted output is
 wrapped in `<untrusted source="...">` tags the model is told never to take
 instructions from, and once an untrusted tool has run, sensitive calls are
-refused for the rest of that turn: the model says what it would do and the user
-confirms in their next message. After a refusal the model gets one more round
-with tool calls turned off (`tool_choice: "none"`), so it has to answer rather
-than keep searching. Calendar reads are not marked untrusted, since
+held for the rest of that turn: the call is not run, and the model gets one
+more round with tool calls turned off (`tool_choice: "none"`), so it has to
+answer rather than keep searching. On the web the held calls are listed under
+the reply, each with its tool and arguments and ticked by default; "Apply
+selected" runs the ticked ones as they are, without asking the model again, and
+rejects the rest, and the outcome replaces the call's result in the
+conversation, so the model sees it next turn. Held calls can be approved until
+the next message is sent; each runs at most once, even when approved from two
+places. Calendar reads are not marked untrusted, since
 changing an event needs its uid from a read first.
 
 `search_history` runs the same hybrid search as the `/history` search over every
