@@ -116,6 +116,9 @@ func (t *turn) run(ctx context.Context) error {
 			}
 		}
 		if request == nil || answer {
+			for i := range messages {
+				messages[i] = messages[i].WithoutReasoning()
+			}
 			t.send(ctx, Event{Reply: messages})
 			return nil
 		}
@@ -123,7 +126,7 @@ func (t *turn) run(ctx context.Context) error {
 			return ErrToolLimit
 		}
 		t.trail = append(t.trail, *request)
-		if !t.send(ctx, Event{Trail: []model.Message{*request}}) {
+		if !t.send(ctx, Event{Trail: []model.Message{request.WithoutReasoning()}}) {
 			return nil
 		}
 		for _, call := range request.ToolCalls {

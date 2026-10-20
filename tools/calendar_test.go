@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,11 @@ func TestCalendarTools_FollowTheUsersOwnChoiceOfCalendars(t *testing.T) {
 	}
 	if got := names(dana); got != "calendar_list,calendar_search,calendar_get,calendar_create,calendar_update,calendar_delete" {
 		t.Fatalf("defaults offer %s", got)
+	}
+	for _, spec := range r.Specs(dana) {
+		if !json.Valid(spec.Function.Parameters) {
+			t.Fatalf("%s parameters are not valid JSON: %s", spec.Function.Name, spec.Function.Parameters)
+		}
 	}
 
 	readOnly := settings.WithSettings(dana, settings.Settings{CustomCalendars: true, CalendarRead: []string{"home"}, CalendarWrite: []string{}})

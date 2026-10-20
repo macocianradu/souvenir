@@ -412,7 +412,7 @@ func (s *Store) parseTime(v string) (t time.Time, allDay bool, err error) {
 			return t.In(s.loc), false, nil
 		}
 	}
-	return t, false, fmt.Errorf("cannot read time %q, expected YYYY-MM-DD or YYYY-MM-DDTHH:MM", v)
+	return t, false, fmt.Errorf("cannot read time %q, expected YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM+02:00", v)
 }
 
 func (s *Store) apply(comp *ical.Component, c Changes) error {

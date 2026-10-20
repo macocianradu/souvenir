@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,5 +219,39 @@ func TestRun_AReplyCutOffAtTheTokenLimitRunsNoTools(t *testing.T) {
 	}
 	if !errors.Is(last.Err, ErrCutOff) || !strings.Contains(last.Err.Error(), "4096") || ran != 0 {
 		t.Fatalf("last event %+v, %d trail messages", last, ran)
+	}
+}
+
+func TestRun_ReasoningGoesBackWithinTheTurnButNotOutOfIt(t *testing.T) {
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sent = append(sent, string(body))
+		if len(sent) == 1 {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"check first\",\"tool_calls\":[{\"index\":0,\"id\":\"call_0\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"all good\",\"content\":\"Final\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	client := *llm.NewLLMClient(config.Config{
+		Api: config.ApiConfig{Url: srv.URL, Timeout: 1000},
+		Llm: config.LLMConfig{MaxToolRounds: 2},
+	})
+	var out []model.Message
+	for ev := range echoAgent().Run(context.Background(), client, conversation()) {
+		if ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+		out = append(out, ev.Trail...)
+		out = append(out, ev.Reply...)
+	}
+	if len(sent) != 2 || !strings.Contains(sent[1], `"reasoning_content":"check first"`) {
+		t.Fatalf("the second round was sent without the first round's reasoning: %v", sent)
+	}
+	for _, m := range out {
+		if m.ReasoningContent != "" || m.Reasoning != "" {
+			t.Fatalf("reasoning left the turn: %+v", m)
+		}
 	}
 }

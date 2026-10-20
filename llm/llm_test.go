@@ -255,8 +255,8 @@ func TestStream_ReadsMistralContentChunks(t *testing.T) {
 	if got.last.Err != nil || got.content != "Hello" || got.reasoning != "let me think" {
 		t.Fatalf("%+v", got)
 	}
-	if got.last.Messages[0].Content != "Hello" {
-		t.Fatalf("final message %+v", got.last.Messages[0])
+	if final := got.last.Messages[0]; final.Content != "Hello" || final.Thinking != "let me think" || final.ReasoningContent != "" {
+		t.Fatalf("final message %+v", final)
 	}
 }
 
@@ -280,5 +280,17 @@ func TestStream_MarksAReplyThatHitTheTokenLimit(t *testing.T) {
 	ch, _ := cl.QueryStream(context.Background(), nil, nil)
 	if last := collect(t, ch).last; !last.Done || !last.Truncated {
 		t.Fatalf("%+v", last)
+	}
+}
+
+func TestStream_KeepsReasoningUnderTheFieldItCameIn(t *testing.T) {
+	cl := newClient(t, sse(
+		`{"choices":[{"delta":{"reasoning_content":"look it "}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"up","content":"Done"}}]}`,
+		`[DONE]`))
+	ch, _ := cl.QueryStream(context.Background(), nil, nil)
+	final := collect(t, ch).last.Messages[0]
+	if final.ReasoningContent != "look it up" || final.Reasoning != "" || final.Content != "Done" {
+		t.Fatalf("%+v", final)
 	}
 }

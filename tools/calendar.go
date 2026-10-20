@@ -17,6 +17,11 @@ const timeHelp = "YYYY-MM-DDTHH:MM in the user's timezone, or YYYY-MM-DD for an 
 	"A time from another zone can be given as is with its UTC offset, such as 2026-10-23T12:00-05:00, " +
 	"rather than converted"
 
+const locationHelp = "The full street address, after the place's name if it has one, such as " +
+	"\"Barclays Center, 620 Atlantic Ave, Brooklyn, NY 11217, United States\", so calendar apps can show it on a map. " +
+	"When the user names only a place, look up its address; when no reliable one can be found, tell the user " +
+	"rather than leaving a vague location"
+
 func CalendarTools(base *calendar.Store) Provider {
 	return Provider{
 		Catalog: calendarTools(base),
@@ -188,13 +193,13 @@ func calendarTools(store *calendar.Store) []Tool {
 					"summary": {"type": "string", "description": "The event title"},
 					"start": {"type": "string", "description": %q},
 					"end": {"type": "string", "description": "Same format as start: when the event, or the first occurrence of a repeating one, ends. For all-day events, its last day. Never the end of a repeating series; that goes in recurrence"},
-					"location": {"type": "string"},
+					"location": {"type": "string", "description": %q},
 					"description": {"type": "string"},
 					"recurrence": {"type": "string", "description": "An iCalendar RRULE for repeating events, such as FREQ=WEEKLY;BYDAY=MO. End the series on a date with UNTIL=20261218T235959Z or after a number of occurrences with COUNT=10. Start and end describe the first occurrence"},
 					"exceptions": {"type": "array", "items": {"type": "string"}, "description": "Dates (YYYY-MM-DD) of occurrences a repeating event skips, such as holidays"}
 				},
 				"required": ["calendar", "summary", "start"]
-			}`, writeEnum, timeHelp)),
+			}`, writeEnum, timeHelp, locationHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var args struct {
 					Calendar string `json:"calendar"`
@@ -224,13 +229,13 @@ func calendarTools(store *calendar.Store) []Tool {
 					"summary": {"type": "string"},
 					"start": {"type": "string", "description": %q},
 					"end": {"type": "string", "description": "Same format as start: when the event, or the first occurrence of a repeating one, ends. For all-day events, its last day. Never the end of a repeating series; that goes in recurrence"},
-					"location": {"type": "string"},
+					"location": {"type": "string", "description": %q},
 					"description": {"type": "string"},
 					"recurrence": {"type": "string", "description": "An iCalendar RRULE, or an empty string to stop repeating"},
 					"exceptions": {"type": "array", "items": {"type": "string"}, "description": "Dates (YYYY-MM-DD) of occurrences to skip. Replaces the event's current list, so include the ones to keep; an empty list clears it"}
 				},
 				"required": ["calendar", "uid"]
-			}`, writeEnum, timeHelp)),
+			}`, writeEnum, timeHelp, locationHelp)),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var args struct {
 					Calendar string `json:"calendar"`
