@@ -106,7 +106,7 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 	var content, reasoningContent, reasoning, thinking strings.Builder
 	toolAcc := map[int]*model.ToolCall{}
 	var order []int
-	truncated := false
+	truncated, finished := false, false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -119,6 +119,7 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
 			cl.logger.Debug("Stream done")
+			finished = true
 			break
 		}
 
@@ -138,8 +139,9 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 			continue
 		}
 
-		if reason := chunk.Choices[0].FinishReason; reason != nil && *reason == "length" {
-			truncated = true
+		if reason := chunk.Choices[0].FinishReason; reason != nil {
+			finished = true
+			truncated = truncated || *reason == "length"
 		}
 		delta := chunk.Choices[0].Delta
 		reasoningContent.WriteString(delta.ReasoningContent)
@@ -180,6 +182,11 @@ func (cl ChatClient) readStream(ctx context.Context, resp *http.Response, events
 	if err := scanner.Err(); err != nil {
 		cl.logger.Error("error reading stream", "error", err)
 		send(StreamEvent{Err: err})
+		return
+	}
+	if !finished {
+		cl.logger.Error("Stream ended without a finish reason")
+		send(StreamEvent{Err: errors.New("the reply stream ended before the reply was finished")})
 		return
 	}
 

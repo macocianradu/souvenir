@@ -21,6 +21,7 @@ const recallTimeout = 3 * time.Second
 var (
 	ErrToolLimit = errors.New("tool call limit reached")
 	ErrCutOff    = errors.New("reply cut off")
+	ErrNoReply   = errors.New("the model kept thinking without writing a reply")
 )
 
 // Event is one step of a turn. The channel closes after an event with Reply
@@ -163,6 +164,12 @@ func (t *turn) run(ctx context.Context) error {
 				break
 			}
 		}
+		if request == nil && !hasText(messages) {
+			if rounds >= t.client.Cfg.Llm.MaxToolRounds {
+				return ErrNoReply
+			}
+			continue
+		}
 		if request == nil || answer {
 			for i := range messages {
 				messages[i] = messages[i].WithoutReasoning()
@@ -264,6 +271,15 @@ func (t *turn) context() []model.Message {
 	}
 	context = append(context, model.AnswerToolCalls(t.conv.ContextMessages())...)
 	return append(context, t.trail...)
+}
+
+func hasText(messages []model.Message) bool {
+	for _, m := range messages {
+		if m.Content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func lastUserMessage(conv model.Conversation) string {

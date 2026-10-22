@@ -171,7 +171,9 @@ func (s *Server) runTurn(ctx context.Context, t *turn, client llm.ChatClient, co
 	st, _ := t.snapshot()
 	failed := st.Err != "" || ctx.Err() != nil
 	reply := st.Reply
-	if reply == nil && st.Content != "" {
+	// A reply that broke off on an error is not saved: it would go back to the
+	// model as if it were a finished answer.
+	if reply == nil && st.Content != "" && st.Err == "" {
 		reply = []model.Message{{Role: "assistant", Content: st.Content}}
 	}
 	for _, m := range reply {

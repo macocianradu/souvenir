@@ -92,6 +92,14 @@ func TestStream_ErrorPayloadEndsTheStreamWithThatError(t *testing.T) {
 	}
 }
 
+func TestStream_EndingWithoutAFinishReasonIsAnError(t *testing.T) {
+	cl := newClient(t, sse(`{"choices":[{"delta":{"content":"pa"}}]}`))
+	ch, _ := cl.QueryStream(context.Background(), nil, nil)
+	if got := collect(t, ch); got.last.Err == nil || got.last.Done {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestStream_MalformedChunkIsAnError(t *testing.T) {
 	cl := newClient(t, sse(`{not json`))
 	ch, _ := cl.QueryStream(context.Background(), nil, nil)

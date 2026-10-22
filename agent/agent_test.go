@@ -222,6 +222,30 @@ func TestRun_AReplyCutOffAtTheTokenLimitRunsNoTools(t *testing.T) {
 	}
 }
 
+func TestRun_AReplyWithOnlyThinkingIsAskedForAgain(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"hmm\"}]}]},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	client := *llm.NewLLMClient(config.Config{
+		Api: config.ApiConfig{Url: srv.URL, Timeout: 1000},
+		Llm: config.LLMConfig{MaxToolRounds: 2},
+	})
+	var last Event
+	for ev := range echoAgent().Run(context.Background(), client, conversation()) {
+		last = ev
+	}
+	if last.Err != nil || len(last.Reply) != 1 || last.Reply[0].Content != "answer" || calls != 2 {
+		t.Fatalf("last event %+v after %d calls", last, calls)
+	}
+}
+
 func TestRun_ReasoningGoesBackWithinTheTurnButNotOutOfIt(t *testing.T) {
 	var sent []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
