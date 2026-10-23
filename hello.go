@@ -24,6 +24,7 @@ import (
 	"git.estatecloud.org/radumaco/souvenir/db/sessions"
 	"git.estatecloud.org/radumaco/souvenir/db/settings"
 	"git.estatecloud.org/radumaco/souvenir/db/users"
+	"git.estatecloud.org/radumaco/souvenir/finance"
 	"git.estatecloud.org/radumaco/souvenir/llm"
 	"git.estatecloud.org/radumaco/souvenir/monitor"
 	"git.estatecloud.org/radumaco/souvenir/news"
@@ -111,6 +112,9 @@ func main() {
 	}
 	if config.Monitor.Enabled() {
 		registry.Provide(tools.MonitorTools(monitor.New(config.Monitor), config.Monitor.Users))
+	}
+	if config.Finance.Enabled() {
+		registry.Provide(tools.FinanceTools(finance.New(config.Finance), config.Finance.Users))
 	}
 	userSettings := settings.NewStore(pool)
 	location := time.Local

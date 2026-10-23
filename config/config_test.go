@@ -217,6 +217,8 @@ func TestValidate_NewsAndMonitorNeedUsersAndAddresses(t *testing.T) {
 		"monitor without users":  `{"Monitor":{"AlertmanagerUrl":"http://alertmanager:9093"}}`,
 		"monitor bad vmalert":    `{"Monitor":{"VmalertUrls":["vmalert"],"Users":["radu"]}}`,
 		"monitor without a time": `{"Monitor":{"LogsUrl":"http://victorialogs:9428","Users":["radu"],"Timeout":0}}`,
+		"finance without token":  `{"Finance":{"Url":"http://firefly:8080","Users":["radu"]}}`,
+		"finance without users":  `{"Finance":{"Url":"http://firefly:8080","Token":"t"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			setRequired(t)
@@ -231,11 +233,14 @@ func TestValidate_NewsAndMonitorNeedUsersAndAddresses(t *testing.T) {
 	t.Setenv("SOUV__news__users", "radu")
 	t.Setenv("SOUV__monitor__vmalertUrls", "http://vmalert:8880,http://vmalert-logs:8880")
 	t.Setenv("SOUV__monitor__users", "radu")
+	t.Setenv("SOUV__finance__url", "http://firefly:8080")
+	t.Setenv("SOUV__finance__token", "t")
+	t.Setenv("SOUV__finance__users", "radu")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.News.Enabled() || len(cfg.Monitor.VmalertUrls) != 2 || cfg.Monitor.Timeout <= 0 {
-		t.Fatalf("%+v %+v", cfg.News, cfg.Monitor)
+	if !cfg.News.Enabled() || len(cfg.Monitor.VmalertUrls) != 2 || cfg.Monitor.Timeout <= 0 || !cfg.Finance.Enabled() || cfg.Finance.Timeout <= 0 {
+		t.Fatalf("%+v %+v %+v", cfg.News, cfg.Monitor, cfg.Finance)
 	}
 }

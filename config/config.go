@@ -30,6 +30,7 @@ type Config struct {
 	Calendars CalendarsConfig
 	News      NewsConfig
 	Monitor   MonitorConfig
+	Finance   FinanceConfig
 	WebSearch WebSearchConfig
 	Fetch     FetchConfig
 	Web       WebConfig
@@ -94,6 +95,15 @@ type MonitorConfig struct {
 func (c MonitorConfig) Enabled() bool {
 	return c.AlertmanagerUrl != "" || len(c.VmalertUrls) > 0 || c.MetricsUrl != "" || c.LogsUrl != ""
 }
+
+type FinanceConfig struct {
+	Url     string
+	Token   string
+	Users   []string
+	Timeout int
+}
+
+func (c FinanceConfig) Enabled() bool { return c.Url != "" }
 
 type SshConfig struct {
 	Listen         string
@@ -266,6 +276,7 @@ func defaultConfig() *Config {
 		CalendarsConfig{},
 		NewsConfig{Timeout: 10000},
 		MonitorConfig{Timeout: 15000},
+		FinanceConfig{Timeout: 15000},
 		WebSearchConfig{Provider: "searxng", Timeout: 10000},
 		FetchConfig{Enabled: true, Timeout: 20000, MaxBytes: 5 << 20, MaxChars: 20000},
 		WebConfig{SessionDays: 30},
@@ -421,6 +432,9 @@ func (cfg Config) validate() error {
 	if err := cfg.Monitor.validate(); err != nil {
 		return err
 	}
+	if err := cfg.Finance.validate(); err != nil {
+		return err
+	}
 	return cfg.Calendars.validate()
 }
 
@@ -501,6 +515,25 @@ func (c MonitorConfig) validate() error {
 	}
 	if c.Timeout <= 0 {
 		return errors.New("Monitor.Timeout must be positive")
+	}
+	return nil
+}
+
+func (c FinanceConfig) validate() error {
+	if !c.Enabled() {
+		return nil
+	}
+	if err := checkUrl("Finance.Url", c.Url); err != nil {
+		return err
+	}
+	if c.Token == "" {
+		return errors.New("Finance.Token must be a Firefly III personal access token")
+	}
+	if len(c.Users) == 0 {
+		return errors.New("Finance.Users must name the users who may read the transactions")
+	}
+	if c.Timeout <= 0 {
+		return errors.New("Finance.Timeout must be positive")
 	}
 	return nil
 }

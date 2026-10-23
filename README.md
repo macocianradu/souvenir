@@ -57,7 +57,7 @@ address actually dialled, so private, loopback, link-local and other non-public
 ranges are refused even behind a public name.
 
 Text written by others can carry instructions aimed at the model, so tools are
-marked untrusted (`web_search`, `web_fetch` and the news and monitoring tools)
+marked untrusted (`web_search`, `web_fetch` and the news, monitoring and finance tools)
 or sensitive (`memory_save`, `memory_update`, `memory_forget`,
 `calendar_create`, `calendar_update`, `calendar_delete`). Untrusted output is
 wrapped in `<untrusted source="...">` tags the model is told never to take
@@ -351,6 +351,27 @@ model chooses a query but never a path. These APIs have no auth of their own,
 so keep them off networks where anything less careful can reach them. Only the
 users named in `Users` are offered the tools. `Timeout` is in milliseconds
 (default 15000).
+
+### Finance
+
+```json
+"Finance": { "Url": "http://firefly:8080", "Token": "...", "Users": ["radu"] }
+```
+
+Reads a [Firefly III](https://www.firefly-iii.org) server through its API, so
+the model can look into spending and income: `finance_accounts` (balances, on
+a given day if asked), `finance_transactions` (a period's transactions, newest
+first, by type, account, category, budget, tag, payee, words and amount, with
+the totals of everything that matched), `finance_summary` (a period's
+spending, income or transfers added up by category, budget, payee, tag, month
+or own account) and `finance_transaction` (one transaction with every split
+and field). Periods default to the last 30 days and are read in full up to
+10,000 transactions, filtered in souvenir, so totals are exact rather than an
+estimate from one page. Only GET requests are sent. `Token` is a personal
+access token made in Firefly III under Options, Profile, OAuth, and it reads
+that Firefly user's books, so only the souvenir users named in `Users` are
+offered the tools. Bank descriptions are written by others, so the tools are
+untrusted. `Timeout` is in milliseconds per request (default 15000).
 
 `Llm.MaxTokens` caps each reply, reasoning included on most providers; 0
 leaves it to the provider. A reply that hits the cap ends the turn with an
