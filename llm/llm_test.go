@@ -166,6 +166,32 @@ func TestRequest_SendsTemplateKwargsOnlyWhenThinkingIsConfigured(t *testing.T) {
 	}
 }
 
+func TestRequest_ReasoningEffortIsSentAndDecidesThinking(t *testing.T) {
+	cl := newClient(t, http.NotFoundHandler())
+	body := func() string {
+		b, _ := json.Marshal(cl.streamRequest(nil, nil))
+		return string(b)
+	}
+	if strings.Contains(body(), "reasoning_effort") {
+		t.Fatal("effort sent without one chosen")
+	}
+	cl.Cfg.Llm.ReasoningEffort = "high"
+	if got := body(); !strings.Contains(got, `"reasoning_effort":"high"`) || strings.Contains(got, "chat_template_kwargs") {
+		t.Fatalf("want the effort alone, since only servers set up for Thinking take template kwargs: %s", got)
+	}
+	off := false
+	cl.Cfg.Llm.Thinking = &off
+	if got := body(); !strings.Contains(got, `"enable_thinking":true`) {
+		t.Fatalf("an effort other than none must turn thinking on: %s", got)
+	}
+	cl.Cfg.Llm.ReasoningEffort = "none"
+	on := true
+	cl.Cfg.Llm.Thinking = &on
+	if got := body(); !strings.Contains(got, `"enable_thinking":false`) || !strings.Contains(got, `"reasoning_effort":"none"`) {
+		t.Fatalf("effort none must turn thinking off: %s", got)
+	}
+}
+
 func TestRequest_ErrorStatusCarriesTheResponseBody(t *testing.T) {
 	cl := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)

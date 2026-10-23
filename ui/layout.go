@@ -73,7 +73,7 @@ func (m *uiModel) setErrorMessage(message string) {
 
 func (m *uiModel) setStatusMessage(message string) {
 	if message == "" {
-		message = "model: " + m.client.Cfg.Llm.Model + " url: " + m.client.Cfg.Api.Url
+		message = "model: " + m.client.Cfg.Llm.Model + " reasoning: " + effortName(m.client.Cfg.Llm.ReasoningEffort) + " url: " + m.client.Cfg.Api.Url
 	}
 	m.statusMessage = m.statusStyle.Render(message)
 	m.layout()

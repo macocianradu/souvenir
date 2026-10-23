@@ -47,9 +47,12 @@
         <input type="file" name="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
         <div class="attachments" hidden></div>
         <textarea name="content" rows="1" placeholder="Ask anything, or paste an image…" aria-label="Message" maxlength="100000"></textarea>
-        {{if .CanThink}}
-        <label class="think"><input type="checkbox" name="think"{{if .Think}} checked{{end}}><span>Think</span></label>
-        {{end}}
+        <label class="effort" title="Reasoning effort">
+          <select name="effort" aria-label="Reasoning effort">
+            <option value=""{{if eq .Effort ""}} selected{{end}}>Default</option>
+            {{range .Efforts}}<option{{if eq . $.Effort}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
         <button type="submit" class="send" title="Send">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
         </button>

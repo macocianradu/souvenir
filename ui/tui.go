@@ -24,6 +24,7 @@ type focusState int
 const (
 	focusChat focusState = iota
 	focusModels
+	focusEffort
 	focusHistory
 	focusMemories
 )

@@ -248,6 +248,10 @@ document.addEventListener("htmx:beforeRequest", (e) => {
     setStatus("Wait for the reply to finish, or stop it.");
     return;
   }
+  if ($("#thread form.held") && !confirm("Some changes are still waiting for your approval. Sending a new message will reject them.")) {
+    e.preventDefault();
+    return;
+  }
   setStatus("");
   $(".send", composer).disabled = true;
 });

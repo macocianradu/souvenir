@@ -395,6 +395,9 @@ func (m *uiModel) handlePickerChosen(msg pickerChosenMsg) {
 	case focusModels:
 		m.logger.Debug("Model chosen", "model", msg.id)
 		m.client.Cfg.Llm.Model = msg.id
+	case focusEffort:
+		m.logger.Debug("Reasoning effort chosen", "effort", msg.id)
+		m.client.Cfg.Llm.ReasoningEffort = msg.id
 	case focusHistory:
 		m.logger.Debug("Conversation chosen", "history", msg.id)
 		conv, err := m.history.GetConversation(m.ctx, msg.id)

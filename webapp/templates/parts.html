@@ -94,9 +94,10 @@
 {{if .NewId}}<div id="landing" hx-swap-oob="delete"></div>
 {{template "heading" .Heading}}
 <input type="hidden" name="conversation" id="conversation-id" value="{{.NewId}}" hx-swap-oob="true">{{end}}
-<nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>{{end}}
+<nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>
+{{with .Rejected}}{{template "held" .}}{{end}}{{end}}
 
-{{define "held"}}{{if .Resolved}}<section class="held resolved">
+{{define "held"}}{{if .Resolved}}<section id="{{.Anchor}}" class="held resolved"{{if .Oob}} hx-swap-oob="outerHTML"{{end}}>
   <h3>{{if .Calls}}Done{{else}}Nothing changed{{end}}</h3>
   <ol class="held-calls">{{range .Calls}}
     <li class="{{if .Failed}}failed{{else}}ran{{end}}">
@@ -106,11 +107,12 @@
     </li>{{end}}
   </ol>
   {{if .Err}}<p class="note error">{{.Err}}</p>{{end}}
-</section>{{else}}<form class="held" hx-post="/c/{{.ConversationId}}/held" hx-swap="outerHTML">
+</section>{{else}}<form id="{{.Anchor}}" class="held" hx-post="/c/{{.ConversationId}}/held" hx-swap="outerHTML">
   <h3>Waiting for your approval</h3>
   <p class="muted">The assistant read web, news or log content in this reply, so these changes were held for you to check.</p>
   <ol class="held-calls">{{range .Calls}}
     <li>
+      <input type="hidden" name="held" value="{{.Id}}">
       <label><input type="checkbox" name="approve" value="{{.Id}}" checked> <code class="tool">{{.Name}}</code></label>
       {{template "held-args" .Args}}
     </li>{{end}}

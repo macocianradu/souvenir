@@ -109,7 +109,7 @@ summarizing off.
 
 Bubble Tea, with a chat view, a landing screen, and a slash-command palette with
 fuzzy matching. The commands are `/exit`, `/history`, `/memories`, `/models`,
-`/new` and `/rename`. `/memories` lists what the assistant remembers, with the
+`/new`, `/reasoning` and `/rename`. `/memories` lists what the assistant remembers, with the
 same `/` search and `x` to forget as the history browser. The history browser reopens any past conversation and picks it back
 up. `/` in it searches every conversation by keyword and by meaning, Esc
 clearing the search, and `x` (or Delete) on a conversation deletes it, with its messages, summaries
@@ -242,6 +242,7 @@ terminal, so an entry without a target writes to `souvenir.log`.
 {
   "Api":       { "Url": "http://localhost:11435", "Key": "", "Timeout": 300000 },
   "Llm":       { "Model": "...", "TitleModel": "...", "Thinking": false,
+                 "ReasoningEffort": "high",
                  "MaxToolRounds": 28, "MaxTokens": 4096,
                  "ContextBudget": 12000, "KeepRecent": 8,
                  "MemoryRecall": 5 },
@@ -358,7 +359,18 @@ their arguments may be cut off too. Models that think at length need more than
 the default.
 
 `Llm.Thinking` sets llama.cpp's `enable_thinking` template argument. Leave it
-out for other servers: nothing server specific is sent unless it is set.
+out for other servers: nothing server specific is sent unless it is set, and
+Mistral rejects the request when it is.
+
+`Llm.ReasoningEffort` is sent as `reasoning_effort`: one of `none`, `low`,
+`high` or `max`, or left out to let the model decide. Models take different
+values: Mistral's `none` and `high` (not every Mistral model takes the field),
+GLM's `low`, `high` and `max`, and a model given one it does not take answers
+with an error naming the ones it does. When `Llm.Thinking` is set too, the
+effort decides `enable_thinking`: off for `none`, on for any other. It can be
+changed in the app, with the dropdown beside the web composer's send button,
+remembered in a cookie, or with `/reasoning` in the TUI, for the session.
+Conversation titles and summaries are requested without it.
 
 `Embedding.Dim` is required and must match the model's output size.
 `Interval` is how often, in minutes, the background pass looks for work, and

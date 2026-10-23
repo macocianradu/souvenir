@@ -143,6 +143,14 @@ func (m uiModel) buildCommands() []command {
 			},
 		},
 		{
+			name:        "reasoning",
+			description: "Choose how hard the model thinks",
+			handler: func(m uiModel, _ string) (uiModel, tea.Cmd) {
+				m.focus = focusEffort
+				return m, m.getEfforts()
+			},
+		},
+		{
 			name:        "rename",
 			description: "Generate a title, or /rename <title> to set one",
 			handler: func(m uiModel, args string) (uiModel, tea.Cmd) {

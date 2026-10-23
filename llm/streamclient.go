@@ -70,6 +70,7 @@ func (cl ChatClient) streamRequest(messages []model.Message, tools []ToolSpec) C
 		Stream:      true,
 		MaxTokens:   cl.Cfg.Llm.MaxTokens,
 		Temperature: cl.Cfg.Llm.Temperature,
+		Effort:      cl.Cfg.Llm.ReasoningEffort,
 		Kwargs:      cl.templateKwargs(true),
 	}
 }

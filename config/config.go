@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -143,16 +144,19 @@ type ApiConfig struct {
 	Timeout int
 }
 
+var ReasoningEfforts = []string{"none", "low", "high", "max"}
+
 type LLMConfig struct {
-	Model         string
-	TitleModel    string
-	Thinking      *bool
-	MaxToolRounds int
-	MaxTokens     int
-	Temperature   *float64
-	ContextBudget int
-	KeepRecent    int
-	MemoryRecall  int
+	Model           string
+	TitleModel      string
+	Thinking        *bool
+	ReasoningEffort string
+	MaxToolRounds   int
+	MaxTokens       int
+	Temperature     *float64
+	ContextBudget   int
+	KeepRecent      int
+	MemoryRecall    int
 }
 
 type LogConfig struct {
@@ -350,6 +354,9 @@ func setField(f reflect.Value, val string) error {
 func (cfg Config) validate() error {
 	if cfg.Api.Url == "" {
 		return errors.New("No API url configured")
+	}
+	if e := cfg.Llm.ReasoningEffort; e != "" && !slices.Contains(ReasoningEfforts, e) {
+		return fmt.Errorf("Llm.ReasoningEffort must be one of %s, or left out", strings.Join(ReasoningEfforts, ", "))
 	}
 	if cfg.Llm.MaxToolRounds <= 0 {
 		return errors.New("Llm.MaxToolRounds must be positive")

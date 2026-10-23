@@ -191,6 +191,42 @@ func TestChat_SendStreamsSavesAndNamesTheConversation(t *testing.T) {
 	}
 }
 
+func (f *fakeLLM) lastStreamed() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.streamed) == 0 {
+		return ""
+	}
+	return f.streamed[len(f.streamed)-1]
+}
+
+func TestChat_ReasoningEffortIsSentAndRemembered(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+
+	w := h.post(dana, "/messages", url.Values{"content": {"hi"}, "effort": {"high"}})
+	h.get(dana, "/turns/"+turnId(t, w.Body.String())+"/events")
+	if got := h.llm.lastStreamed(); !strings.Contains(got, `"reasoning_effort":"high"`) {
+		t.Fatalf("the effort is not sent: %s", got)
+	}
+	c := cookie(w, "souvenir-effort")
+	if c == nil || c.Value != "high" {
+		t.Fatal("the chosen effort is not remembered")
+	}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.AddCookie(dana)
+	r.AddCookie(c)
+	if page := h.do(r).Body.String(); !strings.Contains(page, "<option selected>high</option>") {
+		t.Fatalf("the composer does not show the remembered effort:\n%s", page)
+	}
+
+	w = h.post(dana, "/messages", url.Values{"content": {"hi"}, "effort": {""}})
+	h.get(dana, "/turns/"+turnId(t, w.Body.String())+"/events")
+	if got := h.llm.lastStreamed(); strings.Contains(got, "reasoning_effort") {
+		t.Fatalf("default must leave the effort to the model: %s", got)
+	}
+}
+
 func (h *harness) user(session *http.Cookie) users.User {
 	u, err := h.server.sessions.User(context.Background(), session.Value)
 	if err != nil {
@@ -602,11 +638,11 @@ func TestHeld_ReviewShowsEachCallAndAppliesOnlyTheChosenOnes(t *testing.T) {
 			t.Fatalf("the review lacks %q:\n%s", want, page)
 		}
 	}
-	if w := h.post(h.as("erin"), "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first}}); w.Code != http.StatusNotFound {
+	if w := h.post(h.as("erin"), "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "held": {first, second}, "approve": {first}}); w.Code != http.StatusNotFound {
 		t.Fatalf("erin resolved dana's calls: %d", w.Code)
 	}
 
-	w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first}})
+	w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "held": {first, second}, "approve": {first}})
 	if body := w.Body.String(); w.Code != http.StatusOK || !strings.Contains(body, "Created:") || !strings.Contains(body, model.Rejected) {
 		t.Fatalf("%d\n%s", w.Code, body)
 	}
@@ -614,7 +650,7 @@ func TestHeld_ReviewShowsEachCallAndAppliesOnlyTheChosenOnes(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("%d events written, want 1", len(events))
 	}
-	if w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "approve": {first, second}}); w.Code != http.StatusConflict {
+	if w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "held": {first, second}, "approve": {first, second}}); w.Code != http.StatusConflict {
 		t.Fatalf("resolving again answered %d", w.Code)
 	}
 	if page := h.get(dana, "/c/"+conv.Id).Body.String(); strings.Contains(page, "/held\"") {
@@ -623,6 +659,66 @@ func TestHeld_ReviewShowsEachCallAndAppliesOnlyTheChosenOnes(t *testing.T) {
 	after, _ := h.history.GetConversation(ctx, conv.Id)
 	if !strings.HasPrefix(after.Messages[2].Content, model.Approved+"Created:") || after.Messages[3].Content != model.Rejected {
 		t.Fatalf("stored results %q, %q", after.Messages[2].Content, after.Messages[3].Content)
+	}
+}
+
+func TestHeld_AFormFromBeforeANewerMessageDecidesNothing(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	create := func(id string) model.ToolCall {
+		return model.ToolCall{Id: id, Type: "function", Function: model.FunctionCall{Name: "calendar_create", Arguments: "{}"}}
+	}
+	conv, err := h.history.SaveConversation(ctx, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "add the matches", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{create("old")}, Seq: 2},
+		{Role: "tool", ToolCallId: "old", Content: model.Held, Seq: 3},
+		{Role: "user", Content: "and remember this", Seq: 4},
+		{Role: "assistant", ToolCalls: []model.ToolCall{create("new")}, Seq: 5},
+		{Role: "tool", ToolCallId: "new", Content: model.Held, Seq: 6},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := h.history.GetConversation(ctx, conv.Id)
+	old := stored.Messages[2].Id
+	w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "held": {old}, "approve": {old}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("the stale form answered %d\n%s", w.Code, w.Body.String())
+	}
+	after, _ := h.history.GetConversation(ctx, conv.Id)
+	if after.Messages[5].Content != model.Held {
+		t.Fatalf("the current call was decided by the stale form: %q", after.Messages[5].Content)
+	}
+}
+
+func TestHeld_SendingANewMessageRejectsTheWaitingChanges(t *testing.T) {
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	call := model.ToolCall{Id: "c1", Type: "function", Function: model.FunctionCall{Name: "calendar_create", Arguments: "{}"}}
+	conv, err := h.history.SaveConversation(ctx, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "add the match", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{call}, Seq: 2},
+		{Role: "tool", ToolCallId: "c1", Content: model.Held, Seq: 3},
+		{Role: "assistant", Content: "I'd add it.", Seq: 4},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := h.history.GetConversation(ctx, conv.Id)
+	held := stored.Messages[2].Id
+
+	w := h.post(dana, "/messages", url.Values{"content": {"never mind"}, "conversation": {conv.Id}})
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, `id="held-`+held+`" class="held resolved" hx-swap-oob="outerHTML"`) ||
+		!strings.Contains(body, model.Rejected) {
+		t.Fatalf("%d\n%s", w.Code, body)
+	}
+	h.waitFor(dana, turnId(t, body), func(st turnState) bool { return st.Finished })
+	after, _ := h.history.GetConversation(ctx, conv.Id)
+	if after.Messages[2].Content != model.Rejected {
+		t.Fatalf("stored result %q", after.Messages[2].Content)
 	}
 }
 

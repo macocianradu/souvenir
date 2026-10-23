@@ -36,6 +36,7 @@ type ChatRequest struct {
 	Stream      bool            `json:"stream,omitempty"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Temperature *float64        `json:"temperature,omitempty"`
+	Effort      string          `json:"reasoning_effort,omitempty"`
 	Kwargs      *Kwargs         `json:"chat_template_kwargs,omitempty"`
 }
 
@@ -91,7 +92,11 @@ func (cl ChatClient) templateKwargs(allow bool) *Kwargs {
 	if cl.Cfg.Llm.Thinking == nil {
 		return nil
 	}
-	return &Kwargs{Thinking: allow && *cl.Cfg.Llm.Thinking}
+	think := *cl.Cfg.Llm.Thinking
+	if effort := cl.Cfg.Llm.ReasoningEffort; effort != "" {
+		think = effort != "none"
+	}
+	return &Kwargs{Thinking: allow && think}
 }
 
 func (cl ChatClient) Models(ctx context.Context) ([]string, error) {

@@ -41,6 +41,7 @@ const (
 	streamEvery  = 80 * time.Millisecond
 	streamIdle   = 15 * time.Second
 	modelCookie  = "model"
+	effortCookie = "effort"
 	modelTimeout = 3 * time.Second
 )
 
@@ -83,6 +84,17 @@ func (s *Server) chosenModel(r *http.Request, available []string) string {
 	return s.llm.Cfg.Llm.Model
 }
 
+func (s *Server) chosenEffort(r *http.Request) string {
+	valid := func(e string) bool { return e == "" || slices.Contains(config.ReasoningEfforts, e) }
+	if e := r.FormValue("effort"); r.Form.Has("effort") && valid(e) {
+		return e
+	}
+	if c, err := r.Cookie(s.cookieName(effortCookie)); err == nil && valid(c.Value) {
+		return c.Value
+	}
+	return s.llm.Cfg.Llm.ReasoningEffort
+}
+
 type chatPage struct {
 	User         users.User
 	Initials     string
@@ -94,8 +106,8 @@ type chatPage struct {
 	Sidebar      sidebarView
 	Models       []string
 	Model        string
-	CanThink     bool
-	Think        bool
+	Efforts      []string
+	Effort       string
 }
 
 func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Conversation) {
@@ -115,8 +127,8 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		Sidebar:      sidebar(list, conv.Id, time.Now().In(s.location)),
 		Models:       available,
 		Model:        s.chosenModel(r, available),
-		CanThink:     s.llm.Cfg.Llm.Thinking != nil,
-		Think:        s.llm.Cfg.Llm.Thinking != nil && *s.llm.Cfg.Llm.Thinking,
+		Efforts:      config.ReasoningEfforts,
+		Effort:       s.chosenEffort(r),
 	}
 	if t, ok := s.turns.running(u.Id, conv.Id); ok && conv.Id != "" {
 		shown := slices.IndexFunc(conv.Messages, func(m model.Message) bool { return m.Seq > t.userSeq })
@@ -152,11 +164,12 @@ func fail(w http.ResponseWriter, status int, message string) {
 }
 
 type sentView struct {
-	User    messageView
-	Live    liveView
-	NewId   string
-	Heading headingView
-	Sidebar sidebarView
+	User     messageView
+	Live     liveView
+	NewId    string
+	Heading  headingView
+	Sidebar  sidebarView
+	Rejected *heldView
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +210,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	conv, rejected := s.rejectHeld(ctx, conv)
 	isNew := conv.Id == ""
 	conv.Messages = append(conv.Messages, model.Message{Role: "user", Content: content, Images: images, Seq: len(conv.Messages) + 1})
 	saved, err := s.app.History.SaveConversation(ctx, conv)
@@ -210,10 +224,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	client := s.llm
 	available := s.models(ctx)
 	client.Cfg.Llm.Model = s.chosenModel(r, available)
-	if client.Cfg.Llm.Thinking != nil {
-		think := r.FormValue("think") != ""
-		client.Cfg.Llm.Thinking = &think
-	}
+	client.Cfg.Llm.ReasoningEffort = s.chosenEffort(r)
 	t, turnCtx, err := s.turns.start(users.WithUser(s.base, u), u.Id, conv.Id, len(conv.Messages))
 	if err != nil {
 		fail(w, http.StatusConflict, "Wait for the reply to finish before sending another message.")
@@ -221,8 +232,9 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.runTurn(turnCtx, t, client, conv)
 	s.setCookie(w, modelCookie, client.Cfg.Llm.Model, 365*24*time.Hour)
+	s.setCookie(w, effortCookie, client.Cfg.Llm.ReasoningEffort, 365*24*time.Hour)
 
-	view := sentView{User: messageViews(conv.Messages[len(conv.Messages)-1:], s.location)[0]}
+	view := sentView{User: messageViews(conv.Messages[len(conv.Messages)-1:], s.location)[0], Rejected: rejected}
 	st, _ := t.snapshot()
 	view.Live = s.liveView(t, st)
 	if list, err := s.app.History.GetConversations(ctx); err == nil {

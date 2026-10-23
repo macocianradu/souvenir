@@ -1,9 +1,11 @@
 package webapp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"git.estatecloud.org/radumaco/souvenir/db/users"
@@ -23,13 +25,13 @@ type heldCall struct {
 	Failed bool
 }
 
-// heldView lists the calls waiting for the user's approval, or, once
-// Resolved, what became of them.
 type heldView struct {
 	ConversationId string
+	Anchor         string
 	Calls          []heldCall
 	Resolved       bool
 	Err            string
+	Oob            bool
 }
 
 func heldCalls(conv model.Conversation) *heldView {
@@ -37,11 +39,23 @@ func heldCalls(conv model.Conversation) *heldView {
 	if len(held) == 0 {
 		return nil
 	}
-	v := &heldView{ConversationId: conv.Id}
+	v := &heldView{ConversationId: conv.Id, Anchor: "held-" + held[0].Result.Id}
 	for _, h := range held {
 		v.Calls = append(v.Calls, heldCall{Id: h.Result.Id, Name: h.Call.Function.Name, Args: callArgs(h.Call.Function.Arguments)})
 	}
 	return v
+}
+
+func (v *heldView) lists(ids []string) bool {
+	if len(ids) != len(v.Calls) {
+		return false
+	}
+	for _, call := range v.Calls {
+		if !slices.Contains(ids, call.Id) {
+			return false
+		}
+	}
+	return true
 }
 
 func hasHeld(messages []model.Message) bool {
@@ -98,14 +112,25 @@ func (s *Server) resolveHeld(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, "These changes were already applied or rejected.")
 		return
 	}
+	r.ParseForm()
+	if !pending.lists(r.Form["held"]) {
+		fail(w, http.StatusConflict, "These changes are no longer waiting: a newer message replaced them.")
+		return
+	}
 	var approved []string
 	if r.FormValue("decision") == "apply" {
 		approved = r.Form["approve"]
 	}
 	resolved, err := s.app.Agent.Resolve(ctx, s.app.History, conv, approved)
-	view := heldView{ConversationId: conv.Id, Resolved: true}
 	if err != nil {
 		s.logger.Error("Could not resolve the held calls", "conversation", conv.Id, "error", err)
+	}
+	s.render(w, http.StatusOK, "held", outcome(pending, resolved, err))
+}
+
+func outcome(pending *heldView, resolved []model.Message, err error) *heldView {
+	view := &heldView{ConversationId: pending.ConversationId, Anchor: pending.Anchor, Resolved: true}
+	if err != nil {
 		view.Err = "Not every change could be recorded: " + err.Error()
 	}
 	for _, call := range pending.Calls {
@@ -118,5 +143,27 @@ func (s *Server) resolveHeld(w http.ResponseWriter, r *http.Request) {
 			view.Calls = append(view.Calls, call)
 		}
 	}
-	s.render(w, http.StatusOK, "held", view)
+	return view
+}
+
+func (s *Server) rejectHeld(ctx context.Context, conv model.Conversation) (model.Conversation, *heldView) {
+	pending := heldCalls(conv)
+	if pending == nil {
+		return conv, nil
+	}
+	resolved, err := s.app.Agent.Resolve(ctx, s.app.History, conv, nil)
+	if err != nil {
+		s.logger.Error("Could not reject the held calls", "conversation", conv.Id, "error", err)
+	}
+	conv.Messages = slices.Clone(conv.Messages)
+	for i, m := range conv.Messages {
+		for _, r := range resolved {
+			if r.Id == m.Id {
+				conv.Messages[i].Content = r.Content
+			}
+		}
+	}
+	view := outcome(pending, resolved, err)
+	view.Oob = true
+	return conv, view
 }

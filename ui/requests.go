@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"git.estatecloud.org/radumaco/souvenir/agent"
+	"git.estatecloud.org/radumaco/souvenir/config"
 	"git.estatecloud.org/radumaco/souvenir/db/memory"
 	"git.estatecloud.org/radumaco/souvenir/db/search"
 	"git.estatecloud.org/radumaco/souvenir/model"
@@ -118,6 +119,23 @@ func (m uiModel) getModels() tea.Cmd {
 		}
 		return modelsLoadedMsg{models: items, title: "Choose a model"}
 	}
+}
+
+func (m uiModel) getEfforts() tea.Cmd {
+	return func() tea.Msg {
+		items := []modelItem{{id: "", name: "default", description: "Send no reasoning effort and leave it to the model"}}
+		for _, effort := range config.ReasoningEfforts {
+			items = append(items, modelItem{id: effort, name: effort, description: "reasoning_effort: " + effort})
+		}
+		return modelsLoadedMsg{models: items, title: "Choose a reasoning effort (now: " + effortName(m.client.Cfg.Llm.ReasoningEffort) + ")"}
+	}
+}
+
+func effortName(effort string) string {
+	if effort == "" {
+		return "default"
+	}
+	return effort
 }
 
 func (m uiModel) searchHistory(query string) tea.Cmd {
