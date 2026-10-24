@@ -940,6 +940,10 @@ body.plain {
   .composer-wrap { padding: 4px 12px max(12px, env(safe-area-inset-bottom)); }
   .keyboard .composer-wrap { padding-bottom: 8px; }
   .composer { padding-left: 18px; }
+
+  /* iOS zooms into any focused control under 16px and doesn't zoom back out. */
+  input, textarea, select, .effort select { font-size: 16px; }
+  .effort select { padding: 7px 12px; letter-spacing: 0.04em; }
 }
 
 @media (prefers-reduced-motion: reduce) {
