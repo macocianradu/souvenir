@@ -1,15 +1,21 @@
 // Package finance reads a Firefly III server's accounts and transactions
-// through its REST API. It only ever sends GET requests.
+// through its REST API. Its only writes are setting a transaction's category
+// or subscription and creating a subscription; it never edits or deletes
+// anything else.
 package finance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +81,48 @@ type Split struct {
 	HasAttachments      bool      `json:"has_attachments"`
 }
 
+type Category struct {
+	Id   string `json:"-"`
+	Name string `json:"name"`
+}
+
+// Subscription is what Firefly III's API calls a bill: a recurring payment
+// it expects within an amount range.
+type Subscription struct {
+	Id                string    `json:"-"`
+	Name              string    `json:"name"`
+	AmountMin         string    `json:"amount_min"`
+	AmountMax         string    `json:"amount_max"`
+	CurrencyCode      string    `json:"currency_code"`
+	Date              time.Time `json:"date"`
+	EndDate           time.Time `json:"end_date"`
+	RepeatFreq        string    `json:"repeat_freq"`
+	Skip              int       `json:"skip"`
+	Active            bool      `json:"active"`
+	Notes             string    `json:"notes"`
+	NextExpectedMatch time.Time `json:"next_expected_match"`
+}
+
+type NewSubscription struct {
+	Name         string `json:"name"`
+	AmountMin    string `json:"amount_min"`
+	AmountMax    string `json:"amount_max"`
+	CurrencyCode string `json:"currency_code,omitempty"`
+	Date         string `json:"date"`
+	EndDate      string `json:"end_date,omitempty"`
+	RepeatFreq   string `json:"repeat_freq"`
+	Skip         int    `json:"skip"`
+	Active       bool   `json:"active"`
+	Notes        string `json:"notes,omitempty"`
+}
+
+// Assignment is what Assign sets on a transaction's splits; an empty id
+// leaves that field as it is.
+type Assignment struct {
+	CategoryId     string
+	SubscriptionId string
+}
+
 // Group is a Firefly transaction: one or more splits booked together.
 type Group struct {
 	Id     string  `json:"-"`
@@ -113,19 +161,33 @@ func New(cfg config.FinanceConfig) *Client {
 }
 
 func (c *Client) Accounts(ctx context.Context, kind string, date time.Time) ([]Account, error) {
-	params := url.Values{"type": {kind}, "limit": {strconv.Itoa(pageSize)}}
+	params := url.Values{"type": {kind}}
 	if !date.IsZero() {
 		params.Set("date", date.Format(DateFormat))
 	}
-	var out []Account
+	return all(ctx, c, "/api/v1/accounts", params, func(a *Account, id string) { a.Id = id })
+}
+
+func (c *Client) Categories(ctx context.Context) ([]Category, error) {
+	return all(ctx, c, "/api/v1/categories", url.Values{}, func(cat *Category, id string) { cat.Id = id })
+}
+
+func (c *Client) Subscriptions(ctx context.Context) ([]Subscription, error) {
+	return all(ctx, c, "/api/v1/bills", url.Values{}, func(s *Subscription, id string) { s.Id = id })
+}
+
+// all reads every page of a list, up to MaxPages pages.
+func all[T any](ctx context.Context, c *Client, path string, params url.Values, setId func(*T, string)) ([]T, error) {
+	params.Set("limit", strconv.Itoa(pageSize))
+	var out []T
 	for page := 1; page <= MaxPages; page++ {
 		params.Set("page", strconv.Itoa(page))
-		var resp list[Account]
-		if err := c.get(ctx, "/api/v1/accounts?"+params.Encode(), &resp); err != nil {
+		var resp list[T]
+		if err := c.do(ctx, "GET", path+"?"+params.Encode(), nil, &resp); err != nil {
 			return nil, err
 		}
 		for _, item := range resp.Data {
-			item.Attributes.Id = item.Id
+			setId(&item.Attributes, item.Id)
 			out = append(out, item.Attributes)
 		}
 		if page >= resp.Meta.Pagination.TotalPages {
@@ -156,7 +218,7 @@ func (c *Client) Transactions(ctx context.Context, q Query) (Page, error) {
 	for page := 1; page <= MaxPages; page++ {
 		params.Set("page", strconv.Itoa(page))
 		var resp list[Group]
-		if err := c.get(ctx, path+"?"+params.Encode(), &resp); err != nil {
+		if err := c.do(ctx, "GET", path+"?"+params.Encode(), nil, &resp); err != nil {
 			return Page{}, err
 		}
 		for _, item := range resp.Data {
@@ -175,8 +237,53 @@ func (c *Client) Transaction(ctx context.Context, id string) (Group, error) {
 	var resp struct {
 		Data item[Group] `json:"data"`
 	}
-	if err := c.get(ctx, "/api/v1/transactions/"+url.PathEscape(id), &resp); err != nil {
+	if err := c.do(ctx, "GET", "/api/v1/transactions/"+url.PathEscape(id), nil, &resp); err != nil {
 		return Group{}, err
+	}
+	resp.Data.Attributes.Id = resp.Data.Id
+	return resp.Data.Attributes, nil
+}
+
+// Assign sets a category or subscription on the splits of g whose journal ids
+// are in journals, and changes nothing else. Every split is named in the
+// update, the others with their id alone, so Firefly III cannot take a split
+// left out as one to remove. Rules are not run on the change.
+func (c *Client) Assign(ctx context.Context, g Group, journals []string, a Assignment) (Group, error) {
+	if a.CategoryId == "" && a.SubscriptionId == "" {
+		return Group{}, errors.New("nothing to assign")
+	}
+	type splitUpdate struct {
+		JournalId  string `json:"transaction_journal_id"`
+		CategoryId string `json:"category_id,omitempty"`
+		BillId     string `json:"bill_id,omitempty"`
+	}
+	update := struct {
+		ApplyRules bool          `json:"apply_rules"`
+		Splits     []splitUpdate `json:"transactions"`
+	}{}
+	for _, s := range g.Splits {
+		u := splitUpdate{JournalId: s.JournalId}
+		if slices.Contains(journals, s.JournalId) {
+			u.CategoryId, u.BillId = a.CategoryId, a.SubscriptionId
+		}
+		update.Splits = append(update.Splits, u)
+	}
+	var resp struct {
+		Data item[Group] `json:"data"`
+	}
+	if err := c.do(ctx, "PUT", "/api/v1/transactions/"+url.PathEscape(g.Id), update, &resp); err != nil {
+		return Group{}, err
+	}
+	resp.Data.Attributes.Id = resp.Data.Id
+	return resp.Data.Attributes, nil
+}
+
+func (c *Client) CreateSubscription(ctx context.Context, s NewSubscription) (Subscription, error) {
+	var resp struct {
+		Data item[Subscription] `json:"data"`
+	}
+	if err := c.do(ctx, "POST", "/api/v1/bills", s, &resp); err != nil {
+		return Subscription{}, err
 	}
 	resp.Data.Attributes.Id = resp.Data.Id
 	return resp.Data.Attributes, nil
@@ -196,13 +303,24 @@ type list[T any] struct {
 	} `json:"meta"`
 }
 
-func (c *Client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.url+path, nil)
+func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.url+path, payload)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.api+json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.logger.Error("Request failed", "error", err)
@@ -214,15 +332,38 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return err
 	}
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusOK, http.StatusCreated:
 	case http.StatusNotFound:
 		return fmt.Errorf("not found")
+	case http.StatusUnprocessableEntity:
+		return validationError(data)
 	default:
-		c.logger.Error("Firefly III returned an error", "status", resp.Status, "body", strings.TrimSpace(string(data[:min(len(data), 512)])))
+		c.logger.Error("Firefly III returned an error", "method", method, "status", resp.Status, "body", strings.TrimSpace(string(data[:min(len(data), 512)])))
 		return fmt.Errorf("firefly iii returned %s", resp.Status)
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("could not read the firefly iii response: %w", err)
 	}
 	return nil
+}
+
+// validationError turns Firefly III's 422 answer into the messages it gives
+// for each field, so the model can correct its request.
+func validationError(data []byte) error {
+	var v struct {
+		Message string              `json:"message"`
+		Errors  map[string][]string `json:"errors"`
+	}
+	if json.Unmarshal(data, &v) != nil {
+		return errors.New("firefly iii refused the request")
+	}
+	fields := slices.Sorted(maps.Keys(v.Errors))
+	var parts []string
+	for _, f := range fields {
+		parts = append(parts, f+": "+strings.Join(v.Errors[f], " "))
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("firefly iii refused the request: %s", v.Message)
+	}
+	return fmt.Errorf("firefly iii refused the request: %s", strings.Join(parts, "; "))
 }

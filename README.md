@@ -59,7 +59,8 @@ ranges are refused even behind a public name.
 Text written by others can carry instructions aimed at the model, so tools are
 marked untrusted (`web_search`, `web_fetch` and the news, monitoring and finance tools)
 or sensitive (`memory_save`, `memory_update`, `memory_forget`,
-`calendar_create`, `calendar_update`, `calendar_delete`). Untrusted output is
+`calendar_create`, `calendar_update`, `calendar_delete`, `finance_assign`,
+`finance_subscription_create`). Untrusted output is
 wrapped in `<untrusted source="...">` tags the model is told never to take
 instructions from, and once an untrusted tool has run, sensitive calls are
 held for the rest of that turn: the call is not run, and the model gets one
@@ -364,14 +365,26 @@ a given day if asked), `finance_transactions` (a period's transactions, newest
 first, by type, account, category, budget, tag, payee, words and amount, with
 the totals of everything that matched), `finance_summary` (a period's
 spending, income or transfers added up by category, budget, payee, tag, month
-or own account) and `finance_transaction` (one transaction with every split
-and field). Periods default to the last 30 days and are read in full up to
-10,000 transactions, filtered in souvenir, so totals are exact rather than an
-estimate from one page. Only GET requests are sent. `Token` is a personal
-access token made in Firefly III under Options, Profile, OAuth, and it reads
-that Firefly user's books, so only the souvenir users named in `Users` are
-offered the tools. Bank descriptions are written by others, so the tools are
-untrusted. `Timeout` is in milliseconds per request (default 15000).
+or own account), `finance_transaction` (one transaction with every split and
+field), `finance_categories` and `finance_subscriptions`. Periods default to
+the last 30 days and are read in full up to 10,000 transactions, filtered in
+souvenir, so totals are exact rather than an estimate from one page.
+
+It can write two things and nothing else. `finance_assign` sets an existing
+category, an existing subscription or both on up to 50 transactions (or one
+split of a split transaction), without running Firefly's rules; it never
+creates a category or touches amounts, dates, accounts or descriptions.
+`finance_subscription_create` adds a subscription (a bill, in Firefly's API),
+refusing a name that exists; nothing can change or delete one. Both are
+sensitive, and since every finance read is untrusted, a write that follows a
+read in the same turn is held for the user's approval. The client has no other
+write requests, but Firefly's personal access tokens are not scoped, so the
+token itself could do more: keep it to souvenir.
+
+`Token` is a personal access token made in Firefly III under Options, Profile,
+OAuth, and it reads that Firefly user's books, so only the souvenir users
+named in `Users` are offered the tools. `Timeout` is in milliseconds per
+request (default 15000).
 
 `Llm.MaxTokens` caps each reply, reasoning included on most providers; 0
 leaves it to the provider. A reply that hits the cap ends the turn with an

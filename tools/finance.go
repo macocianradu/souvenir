@@ -226,6 +226,229 @@ func financeTools(client *finance.Client) []Tool {
 				return describeGroup(g), nil
 			},
 		},
+		{
+			Name:      "finance_categories",
+			Untrusted: true,
+			Description: "List the categories in the user's Firefly III bookkeeping. Use it before finance_assign, " +
+				"which only takes a category that exists.",
+			Parameters: json.RawMessage(`{"type": "object", "properties": {}}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				categories, err := client.Categories(ctx)
+				if err != nil {
+					return "", err
+				}
+				if len(categories) == 0 {
+					return "No categories.", nil
+				}
+				names := make([]string, len(categories))
+				for i, c := range categories {
+					names[i] = oneLine(c.Name)
+				}
+				slices.SortFunc(names, func(x, y string) int { return strings.Compare(strings.ToLower(x), strings.ToLower(y)) })
+				return strings.Join(names, "\n"), nil
+			},
+		},
+		{
+			Name:      "finance_subscriptions",
+			Untrusted: true,
+			Description: "List the subscriptions (recurring bills) in the user's Firefly III bookkeeping, with their " +
+				"expected amounts, how often they repeat and when they are next due. Check it before " +
+				"finance_subscription_create so a subscription is not made twice.",
+			Parameters: json.RawMessage(`{"type": "object", "properties": {}}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				subs, err := client.Subscriptions(ctx)
+				if err != nil {
+					return "", err
+				}
+				if len(subs) == 0 {
+					return "No subscriptions.", nil
+				}
+				var b strings.Builder
+				for _, s := range subs {
+					b.WriteString(describeSubscription(s) + "\n")
+				}
+				return strings.TrimSpace(b.String()), nil
+			},
+		},
+		{
+			Name:      "finance_assign",
+			Sensitive: true,
+			Description: "Set the category, the subscription or both on transactions in the user's Firefly III " +
+				"bookkeeping. It changes nothing else, only takes a category from finance_categories or a " +
+				"subscription from finance_subscriptions, and never creates either. Use it when the user asks to " +
+				"categorise transactions or link payments to a subscription; show them what you would change first " +
+				"when they did not say exactly.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"transactions": {"type": "array", "maxItems": 50, "description": "The transactions to change, from finance_transactions",
+						"items": {"type": "object", "properties": {
+							"transaction_id": {"type": "integer"},
+							"split": {"type": "integer", "description": "For a split transaction, the split number to change. Leave out for every split"}
+						}, "required": ["transaction_id"]}},
+					"category": {"type": "string", "description": "An existing category's name"},
+					"subscription": {"type": "string", "description": "An existing subscription's name"}
+				},
+				"required": ["transactions"]
+			}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args struct {
+					Transactions []struct {
+						Id    int64 `json:"transaction_id"`
+						Split int   `json:"split"`
+					} `json:"transactions"`
+					Category     string `json:"category"`
+					Subscription string `json:"subscription"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return "", err
+				}
+				switch {
+				case len(args.Transactions) == 0:
+					return "", errors.New("name at least one transaction")
+				case len(args.Transactions) > 50:
+					return "", errors.New("at most 50 transactions at a time")
+				case strings.TrimSpace(args.Category) == "" && strings.TrimSpace(args.Subscription) == "":
+					return "", errors.New("give a category, a subscription or both")
+				}
+				var a finance.Assignment
+				var set []string
+				if name := strings.TrimSpace(args.Category); name != "" {
+					categories, err := client.Categories(ctx)
+					if err != nil {
+						return "", err
+					}
+					i := slices.IndexFunc(categories, func(c finance.Category) bool { return strings.EqualFold(strings.TrimSpace(c.Name), name) })
+					if i < 0 {
+						return "", fmt.Errorf("no category %q; it has to exist in Firefly III first, so list them with finance_categories", name)
+					}
+					a.CategoryId = categories[i].Id
+					set = append(set, "category "+categories[i].Name)
+				}
+				if name := strings.TrimSpace(args.Subscription); name != "" {
+					subs, err := client.Subscriptions(ctx)
+					if err != nil {
+						return "", err
+					}
+					i := slices.IndexFunc(subs, func(s finance.Subscription) bool { return strings.EqualFold(strings.TrimSpace(s.Name), name) })
+					if i < 0 {
+						return "", fmt.Errorf("no subscription %q; list them with finance_subscriptions", name)
+					}
+					a.SubscriptionId = subs[i].Id
+					set = append(set, "subscription "+subs[i].Name)
+				}
+				var b strings.Builder
+				changed := 0
+				for _, t := range args.Transactions {
+					line, err := assignOne(ctx, client, t.Id, t.Split, a)
+					if err != nil {
+						fmt.Fprintf(&b, "- transaction %d: not changed, %v\n", t.Id, err)
+						continue
+					}
+					changed++
+					b.WriteString("- " + line + "\n")
+				}
+				if changed == 0 {
+					return "", errors.New("no transaction was changed:\n" + strings.TrimSpace(b.String()))
+				}
+				return fmt.Sprintf("Set %s on %d of %d transactions:\n%s", strings.Join(set, " and "), changed, len(args.Transactions), strings.TrimSpace(b.String())), nil
+			},
+		},
+		{
+			Name:      "finance_subscription_create",
+			Sensitive: true,
+			Description: "Create a subscription (a recurring bill such as rent, a phone plan or a streaming service) in " +
+				"the user's Firefly III bookkeeping, so it can track whether each payment arrived. It only creates; " +
+				"it cannot change or delete one. Check finance_subscriptions first, and base the amounts and dates " +
+				"on the user's past payments from finance_transactions. Link the payments to it with finance_assign.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Such as \"Netflix\" or \"Rent\""},
+					"amount_min": {"type": "number", "description": "The smallest expected payment"},
+					"amount_max": {"type": "number", "description": "The largest expected payment. Default amount_min"},
+					"currency_code": {"type": "string", "description": "Such as EUR. Default the user's main currency"},
+					"date": {"type": "string", "description": "A day it is due, such as the first payment, YYYY-MM-DD; later ones follow from repeat_freq"},
+					"repeat_freq": {"type": "string", "enum": ["weekly", "monthly", "quarterly", "half-year", "yearly"]},
+					"skip": {"type": "integer", "description": "Periods skipped between payments: 1 with monthly is every other month. Default 0"},
+					"end_date": {"type": "string", "description": "The last day it applies, YYYY-MM-DD, for one that ends"},
+					"notes": {"type": "string"}
+				},
+				"required": ["name", "amount_min", "date", "repeat_freq"]
+			}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args struct {
+					Name         string   `json:"name"`
+					AmountMin    float64  `json:"amount_min"`
+					AmountMax    *float64 `json:"amount_max"`
+					CurrencyCode string   `json:"currency_code"`
+					Date         string   `json:"date"`
+					RepeatFreq   string   `json:"repeat_freq"`
+					Skip         int      `json:"skip"`
+					EndDate      string   `json:"end_date"`
+					Notes        string   `json:"notes"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return "", err
+				}
+				args.Name = strings.TrimSpace(args.Name)
+				if args.Name == "" {
+					return "", errors.New("name is required")
+				}
+				amountMax := args.AmountMin
+				if args.AmountMax != nil {
+					amountMax = *args.AmountMax
+				}
+				if args.AmountMin <= 0 || amountMax < args.AmountMin {
+					return "", errors.New("amount_min must be positive and amount_max at least amount_min")
+				}
+				switch args.RepeatFreq {
+				case "weekly", "monthly", "quarterly", "half-year", "yearly":
+				default:
+					return "", fmt.Errorf("repeat_freq must be weekly, monthly, quarterly, half-year or yearly, not %q", args.RepeatFreq)
+				}
+				if args.Skip < 0 {
+					return "", errors.New("skip must not be negative")
+				}
+				date, err := parseDay("date", args.Date)
+				if err != nil || date.IsZero() {
+					return "", cmp.Or(err, errors.New("date is required"))
+				}
+				end, err := parseDay("end_date", args.EndDate)
+				if err != nil {
+					return "", err
+				}
+				if !end.IsZero() && end.Before(date) {
+					return "", errors.New("end_date must not be before date")
+				}
+				existing, err := client.Subscriptions(ctx)
+				if err != nil {
+					return "", err
+				}
+				if i := slices.IndexFunc(existing, func(s finance.Subscription) bool { return strings.EqualFold(strings.TrimSpace(s.Name), args.Name) }); i >= 0 {
+					return "", fmt.Errorf("a subscription named %q already exists: %s", args.Name, describeSubscription(existing[i]))
+				}
+				s := finance.NewSubscription{
+					Name:         args.Name,
+					AmountMin:    strconv.FormatFloat(args.AmountMin, 'f', -1, 64),
+					AmountMax:    strconv.FormatFloat(amountMax, 'f', -1, 64),
+					CurrencyCode: strings.ToUpper(strings.TrimSpace(args.CurrencyCode)),
+					Date:         date.Format(finance.DateFormat),
+					RepeatFreq:   args.RepeatFreq,
+					Skip:         args.Skip,
+					Active:       true,
+					Notes:        strings.TrimSpace(args.Notes),
+				}
+				if !end.IsZero() {
+					s.EndDate = end.Format(finance.DateFormat)
+				}
+				created, err := client.CreateSubscription(ctx, s)
+				if err != nil {
+					return "", err
+				}
+				return "Created " + describeSubscription(created), nil
+			},
+		},
 	}
 }
 
@@ -249,6 +472,7 @@ type split struct {
 	finance.Split
 	group  string
 	title  string
+	index  int
 	splits int
 	amount *big.Rat
 }
@@ -317,8 +541,8 @@ func (a financeArgs) scan(ctx context.Context, client *finance.Client) (scanned,
 	out := scanned{start: start, end: end, complete: page.Complete}
 	words := strings.Fields(strings.ToLower(a.Search))
 	for _, g := range page.Groups {
-		for _, s := range g.Splits {
-			sp := split{Split: s, group: g.Id, title: g.Title, splits: len(g.Splits), amount: parseAmount(s.Amount)}
+		for i, s := range g.Splits {
+			sp := split{Split: s, group: g.Id, title: g.Title, index: i + 1, splits: len(g.Splits), amount: parseAmount(s.Amount)}
 			if a.matches(sp, words) {
 				out.splits = append(out.splits, sp)
 			}
@@ -477,13 +701,17 @@ func splitLine(s split) string {
 	if len(s.Tags) > 0 {
 		notes = append(notes, "tags: "+strings.Join(s.Tags, ", "))
 	}
-	if s.splits > 1 {
-		notes = append(notes, fmt.Sprintf("one of %d splits", s.splits))
+	if s.SubscriptionName != "" || s.BillName != "" {
+		notes = append(notes, "subscription: "+oneLine(cmp.Or(s.SubscriptionName, s.BillName)))
 	}
 	if len(notes) > 0 {
 		b.WriteString(" (" + strings.Join(notes, "; ") + ")")
 	}
-	fmt.Fprintf(&b, " [transaction_id: %s]", s.group)
+	fmt.Fprintf(&b, " [transaction_id: %s", s.group)
+	if s.splits > 1 {
+		fmt.Fprintf(&b, ", split %d of %d", s.index, s.splits)
+	}
+	b.WriteString("]")
 	return b.String()
 }
 
@@ -543,6 +771,69 @@ func describeGroup(g finance.Group) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// assignOne applies a to one transaction, or to one of its splits, and
+// describes what it changed.
+func assignOne(ctx context.Context, client *finance.Client, id int64, splitNo int, a finance.Assignment) (string, error) {
+	if id <= 0 {
+		return "", errors.New("transaction_id is required")
+	}
+	g, err := client.Transaction(ctx, strconv.FormatInt(id, 10))
+	if err != nil {
+		return "", err
+	}
+	if len(g.Splits) == 0 {
+		return "", errors.New("it has no splits")
+	}
+	targets := g.Splits
+	if splitNo != 0 {
+		if splitNo < 1 || splitNo > len(g.Splits) {
+			return "", fmt.Errorf("it has %d splits, not a split %d", len(g.Splits), splitNo)
+		}
+		targets = g.Splits[splitNo-1 : splitNo]
+	}
+	journals := make([]string, len(targets))
+	for i, s := range targets {
+		journals[i] = s.JournalId
+	}
+	if _, err := client.Assign(ctx, g, journals, a); err != nil {
+		return "", err
+	}
+	s := targets[0]
+	line := fmt.Sprintf("transaction %d, %s %s%s %s to %s", id, s.Date.Format(finance.DateFormat), sign(s.Type),
+		parseAmount(s.Amount).FloatString(2), s.CurrencyCode, oneLine(counterparty(split{Split: s})))
+	if splitNo != 0 {
+		line += fmt.Sprintf(" (split %d)", splitNo)
+	} else if len(targets) > 1 {
+		line += fmt.Sprintf(" (all %d splits)", len(targets))
+	}
+	return line, nil
+}
+
+func describeSubscription(s finance.Subscription) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s [subscription_id: %s]: ", oneLine(s.Name), s.Id)
+	lo, hi := parseAmount(s.AmountMin), parseAmount(s.AmountMax)
+	if lo.Cmp(hi) == 0 {
+		b.WriteString(lo.FloatString(2))
+	} else {
+		b.WriteString(lo.FloatString(2) + " to " + hi.FloatString(2))
+	}
+	b.WriteString(" " + s.CurrencyCode + " " + s.RepeatFreq)
+	if s.Skip > 0 {
+		fmt.Fprintf(&b, ", skipping %d between payments", s.Skip)
+	}
+	if !s.NextExpectedMatch.IsZero() {
+		b.WriteString(", next due " + s.NextExpectedMatch.Format(finance.DateFormat))
+	}
+	if !s.EndDate.IsZero() {
+		b.WriteString(", ends " + s.EndDate.Format(finance.DateFormat))
+	}
+	if !s.Active {
+		b.WriteString(" (inactive)")
+	}
+	return b.String()
 }
 
 func accountRef(name, kind, iban, id string) string {

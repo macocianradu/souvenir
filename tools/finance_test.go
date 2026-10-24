@@ -2,6 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,31 +33,52 @@ const fireflyGroups = `[
 ]`
 
 // fireflyServer answers like Firefly III, serving the groups above over two
-// pages, and records each request's method, path and query.
+// pages, and records each request's method, path, query and body.
 func fireflyServer(t *testing.T, seen *[]string) *finance.Client {
+	var groups []json.RawMessage
+	if err := json.Unmarshal([]byte(fireflyGroups), &groups); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*seen = append(*seen, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		body, _ := io.ReadAll(r.Body)
+		*seen = append(*seen, strings.TrimSpace(r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+string(body)))
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			http.Error(w, `{"message":"Unauthenticated."}`, http.StatusUnauthorized)
 			return
 		}
-		switch r.URL.Path {
-		case "/api/v1/accounts":
+		page := func(data ...json.RawMessage) {
+			out, _ := json.Marshal(data)
+			fmt.Fprintf(w, `{"data":%s,"meta":{"pagination":{"total":3,"total_pages":2}}}`, out)
+		}
+		switch path := r.URL.Path; {
+		case path == "/api/v1/accounts":
 			w.Write([]byte(`{"data":[
 				{"id":"1","attributes":{"name":"Checking","type":"asset","account_role":"defaultAsset","active":true,"currency_code":"EUR","current_balance":"1200.5","iban":"BE00 1234"}},
 				{"id":"2","attributes":{"name":"Savings","type":"asset","account_role":"savingAsset","active":true,"currency_code":"EUR","current_balance":"5000"}}
 			],"meta":{"pagination":{"total":2,"total_pages":1}}}`))
-		case "/api/v1/transactions", "/api/v1/accounts/1/transactions":
-			groups := strings.SplitN(fireflyGroups, "\n\t{\"type\"", 4)
-			if r.URL.Query().Get("page") == "2" {
-				w.Write([]byte(`{"data":[{"type"` + groups[3] + `,"meta":{"pagination":{"total":3,"total_pages":2}}}`))
+		case path == "/api/v1/categories":
+			w.Write([]byte(`{"data":[{"id":"3","attributes":{"name":"Groceries"}},{"id":"4","attributes":{"name":"electronics"}}],"meta":{"pagination":{"total_pages":1}}}`))
+		case path == "/api/v1/bills" && r.Method == "GET":
+			w.Write([]byte(`{"data":[{"id":"8","attributes":{"name":"Netflix","amount_min":"13.99","amount_max":"13.99","currency_code":"EUR",
+				"repeat_freq":"monthly","skip":0,"active":true,"next_expected_match":"2026-11-03T00:00:00+01:00"}}],"meta":{"pagination":{"total_pages":1}}}`))
+		case path == "/api/v1/bills" && r.Method == "POST":
+			var in map[string]any
+			json.Unmarshal(body, &in)
+			if in["amount_min"] == "13" {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				w.Write([]byte(`{"message":"The given data was invalid.","errors":{"currency_code":["The currency code is invalid."]}}`))
 				return
 			}
-			first := strings.TrimSuffix(strings.Join(groups[:3], "\n\t{\"type\""), ",")
-			w.Write([]byte(`{"data":` + first + `],"meta":{"pagination":{"total":3,"total_pages":2}}}`))
-		case "/api/v1/transactions/11":
-			groups := strings.SplitN(fireflyGroups, "\n\t{\"type\"", 4)
-			w.Write([]byte(`{"data":{"type"` + strings.TrimSuffix(strings.TrimSpace(groups[2]), ",") + `}`))
+			fmt.Fprintf(w, `{"data":{"id":"9","attributes":{"name":%q,"amount_min":%q,"amount_max":%q,"currency_code":"EUR","repeat_freq":%q,"active":true}}}`,
+				in["name"], in["amount_min"], in["amount_max"], in["repeat_freq"])
+		case path == "/api/v1/transactions" || path == "/api/v1/accounts/1/transactions":
+			if r.URL.Query().Get("page") == "2" {
+				page(groups[2])
+				return
+			}
+			page(groups[:2]...)
+		case strings.HasPrefix(path, "/api/v1/transactions/1") && len(path) == len("/api/v1/transactions/10"):
+			fmt.Fprintf(w, `{"data":%s}`, groups[path[len(path)-1]-'0'])
 		default:
 			http.NotFound(w, r)
 		}
@@ -66,7 +90,7 @@ func fireflyServer(t *testing.T, seen *[]string) *finance.Client {
 func TestFinanceTools_OnlyForTheNamedUsers(t *testing.T) {
 	var seen []string
 	p := FinanceTools(fireflyServer(t, &seen), []string{"radu"})
-	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "1", Name: "radu"})); len(got) != 4 {
+	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "1", Name: "radu"})); len(got) != 8 {
 		t.Fatalf("radu gets %d tools", len(got))
 	}
 	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "2", Name: "guest"})); got != nil {
@@ -76,7 +100,11 @@ func TestFinanceTools_OnlyForTheNamedUsers(t *testing.T) {
 		t.Fatal("a request without a user is offered the finance tools")
 	}
 	for _, tool := range p.Catalog {
-		if !tool.Untrusted {
+		writes := tool.Name == "finance_assign" || tool.Name == "finance_subscription_create"
+		if writes != tool.Sensitive {
+			t.Fatalf("%s: sensitive is %v", tool.Name, tool.Sensitive)
+		}
+		if !writes && !tool.Untrusted {
 			t.Fatalf("%s returns bank descriptions, so it must be untrusted", tool.Name)
 		}
 	}
@@ -90,7 +118,7 @@ func TestFinanceTransactions_ReadsEveryPageAndFilters(t *testing.T) {
 		"4 matching transactions from 2026-09-01 to 2026-10-31",
 		"withdrawals -59.75 EUR", "deposits +3000.00 EUR",
 		"2026-10-20 -42.50 EUR, Checking → Delhaize: Weekly shop (category: Groceries; budget: Food; tags: home) [transaction_id: 10]",
-		"(one of 2 splits) [transaction_id: 11]",
+		"[transaction_id: 11, split 1 of 2]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
@@ -176,6 +204,75 @@ func TestFinanceAccountsAndTransaction(t *testing.T) {
 		}
 	}
 	if out := runTool(t, tools, "finance_transaction", `{"transaction_id":99}`); out != "Error: not found" {
+		t.Fatal(out)
+	}
+}
+
+func TestFinanceAssign_SetsOnlyTheCategoryOnTheChosenSplit(t *testing.T) {
+	var seen []string
+	tools := financeTools(fireflyServer(t, &seen))
+	out := runTool(t, tools, "finance_assign", `{"transactions":[{"transaction_id":11,"split":1},{"transaction_id":10}],"category":"ELECTRONICS"}`)
+	for _, want := range []string{"Set category electronics on 2 of 2 transactions", "transaction 11, 2026-09-02 -10.00 EUR to Amazon (split 1)",
+		"transaction 10, 2026-10-20 -42.50 EUR to Delhaize"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	var puts []string
+	for _, s := range seen {
+		if strings.HasPrefix(s, "PUT ") {
+			puts = append(puts, s)
+		} else if !strings.HasPrefix(s, "GET ") {
+			t.Fatalf("sent %s", s)
+		}
+	}
+	want := []string{
+		`PUT /api/v1/transactions/11? {"apply_rules":false,"transactions":[{"transaction_journal_id":"101","category_id":"4"},{"transaction_journal_id":"102"}]}`,
+		`PUT /api/v1/transactions/10? {"apply_rules":false,"transactions":[{"transaction_journal_id":"100","category_id":"4"}]}`,
+	}
+	if strings.Join(puts, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("sent\n%s", strings.Join(puts, "\n"))
+	}
+
+	seen = nil
+	out = runTool(t, tools, "finance_assign", `{"transactions":[{"transaction_id":12},{"transaction_id":11,"split":3},{"transaction_id":99}],"subscription":"netflix"}`)
+	if !strings.Contains(out, "Set subscription Netflix on 1 of 3") || !strings.Contains(out, "transaction 11: not changed, it has 2 splits, not a split 3") ||
+		!strings.Contains(out, "transaction 99: not changed, not found") || !strings.Contains(seen[len(seen)-3], `"bill_id":"8"`) {
+		t.Fatalf("%s\n%v", out, seen)
+	}
+	if out := runTool(t, tools, "finance_assign", `{"transactions":[{"transaction_id":10}],"category":"Fun"}`); !strings.Contains(out, `no category "Fun"`) {
+		t.Fatal(out)
+	}
+	if out := runTool(t, tools, "finance_assign", `{"transactions":[{"transaction_id":10}]}`); !strings.HasPrefix(out, "Error: give a category") {
+		t.Fatal(out)
+	}
+}
+
+func TestFinanceSubscriptionCreate(t *testing.T) {
+	var seen []string
+	tools := financeTools(fireflyServer(t, &seen))
+	out := runTool(t, tools, "finance_subscription_create", `{"name":"Spotify","amount_min":10.99,"date":"2026-11-05","repeat_freq":"monthly"}`)
+	if out != "Created Spotify [subscription_id: 9]: 10.99 EUR monthly" {
+		t.Fatal(out)
+	}
+	if last := seen[len(seen)-1]; last != `POST /api/v1/bills? {"name":"Spotify","amount_min":"10.99","amount_max":"10.99","date":"2026-11-05","repeat_freq":"monthly","skip":0,"active":true}` {
+		t.Fatal(last)
+	}
+	for args, want := range map[string]string{
+		`{"name":"netflix","amount_min":13.99,"date":"2026-11-03","repeat_freq":"monthly"}`:                `Error: a subscription named "netflix" already exists: Netflix [subscription_id: 8]: 13.99 EUR monthly, next due 2026-11-03`,
+		`{"name":"Gym","amount_min":30,"amount_max":20,"date":"2026-11-01","repeat_freq":"monthly"}`:       "Error: amount_min must be positive and amount_max at least amount_min",
+		`{"name":"Gym","amount_min":30,"date":"2026-11-01","repeat_freq":"daily"}`:                         `Error: repeat_freq must be weekly, monthly, quarterly, half-year or yearly, not "daily"`,
+		`{"name":"Gym","amount_min":30,"repeat_freq":"monthly"}`:                                           "Error: date is required",
+		`{"name":"Gym","amount_min":13,"currency_code":"XXX","date":"2026-11-01","repeat_freq":"monthly"}`: "Error: firefly iii refused the request: currency_code: The currency code is invalid.",
+	} {
+		if got := runTool(t, tools, "finance_subscription_create", args); got != want {
+			t.Fatalf("%s:\n got %s\nwant %s", args, got, want)
+		}
+	}
+	if out := runTool(t, tools, "finance_subscriptions", `{}`); out != "Netflix [subscription_id: 8]: 13.99 EUR monthly, next due 2026-11-03" {
+		t.Fatal(out)
+	}
+	if out := runTool(t, tools, "finance_categories", `{}`); out != "electronics\nGroceries" {
 		t.Fatal(out)
 	}
 }
