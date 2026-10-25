@@ -138,6 +138,8 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request, conv model.Con
 		st, _ := t.snapshot()
 		live := s.liveView(t, st)
 		p.Live = &live
+	} else if res, ok := s.resolutions.get(u.Id, conv.Id); ok && !res.finished() {
+		p.Held = res.current()
 	} else {
 		p.Held = heldCalls(conv)
 	}
@@ -202,6 +204,10 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	if id := r.FormValue("conversation"); id != "" {
 		if _, busy := s.turns.running(u.Id, id); busy {
 			fail(w, http.StatusConflict, "Wait for the reply to finish before sending another message.")
+			return
+		}
+		if s.resolutions.running(u.Id, id) {
+			fail(w, http.StatusConflict, "Wait for the approved changes to be applied before sending another message.")
 			return
 		}
 		var err error
@@ -311,6 +317,10 @@ func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if s.turns.unfinished(u.Id, id) {
 		fail(w, http.StatusConflict, "Wait for the reply to finish before deleting.")
+		return
+	}
+	if s.resolutions.running(u.Id, id) {
+		fail(w, http.StatusConflict, "Wait for the approved changes to be applied before deleting.")
 		return
 	}
 	if err := s.app.History.DeleteConversation(ctx, id); err != nil {

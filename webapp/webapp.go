@@ -38,11 +38,13 @@ type Server struct {
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
 
-	app       App
-	llm       llm.ChatClient
-	turns     *turns
-	modelList models
-	location  *time.Location
+	app   App
+	llm   llm.ChatClient
+	turns *turns
+	// resolutions are the held calls being applied, per conversation.
+	resolutions *resolutions
+	modelList   models
+	location    *time.Location
 	// base outlives requests: turns run on it.
 	base context.Context
 }
@@ -56,19 +58,20 @@ func New(cfg config.WebConfig, oc config.OidcConfig, accounts *users.Store, stor
 		}
 	}
 	return &Server{
-		app:      app,
-		llm:      *llm.NewLLMClient(app.Config),
-		turns:    newTurns(),
-		location: location,
-		base:     context.Background(),
-		logger:   *slog.Default().With("Component", "Web"),
-		cfg:      cfg,
-		oidc:     oc,
-		accounts: accounts,
-		sessions: store,
-		origin:   base.Scheme + "://" + base.Host,
-		secure:   base.Scheme == "https",
-		client:   &http.Client{Timeout: 15 * time.Second},
+		app:         app,
+		llm:         *llm.NewLLMClient(app.Config),
+		turns:       newTurns(),
+		resolutions: newResolutions(),
+		location:    location,
+		base:        context.Background(),
+		logger:      *slog.Default().With("Component", "Web"),
+		cfg:         cfg,
+		oidc:        oc,
+		accounts:    accounts,
+		sessions:    store,
+		origin:      base.Scheme + "://" + base.Host,
+		secure:      base.Scheme == "https",
+		client:      &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -85,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /c/{id}/title", s.RequireUser(http.HandlerFunc(s.rename)))
 	mux.Handle("POST /c/{id}/delete", s.RequireUser(http.HandlerFunc(s.deleteConversation)))
 	mux.Handle("POST /c/{id}/held", s.RequireUser(http.HandlerFunc(s.resolveHeld)))
+	mux.Handle("GET /c/{id}/held", s.RequireUser(http.HandlerFunc(s.heldStatus)))
 	mux.Handle("GET /settings", s.RequireUser(http.HandlerFunc(s.settingsHome)))
 	mux.Handle("GET /settings/{tab}", s.RequireUser(http.HandlerFunc(s.settingsPage)))
 	mux.Handle("POST /settings/tools", s.RequireUser(http.HandlerFunc(s.saveTools)))

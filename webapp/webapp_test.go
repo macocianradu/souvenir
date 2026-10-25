@@ -142,6 +142,8 @@ type harness struct {
 	settings *settings.Store
 	// calendarRoot holds dana's calendars.
 	calendarRoot string
+	// release lets a running slow_write call finish.
+	release chan struct{}
 }
 
 func newHarness(t *testing.T) *harness {
@@ -159,11 +161,25 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	release := make(chan struct{})
 	registry := tools.NewRegistry(tools.Tool{
 		Name:        "echo",
 		Description: "Repeat what it is given. Only for tests.",
 		Parameters:  json.RawMessage(`{"type":"object"}`),
 		Run:         func(context.Context, json.RawMessage) (string, error) { return "echo", nil },
+	}, tools.Tool{
+		Name:        "slow_write",
+		Description: "A write that runs until the test releases it. Only for tests.",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+		Sensitive:   true,
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			select {
+			case <-release:
+				return "wrote it", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
 	}).Provide(tools.CalendarTools(cals))
 	userSettings := settings.NewStore(pool)
 	memories, err := memory.NewStore(context.Background(), pool, nil)
@@ -186,7 +202,7 @@ func newHarness(t *testing.T) *harness {
 			Tools:     registry,
 			Calendars: cals,
 		})
-	return &harness{t: t, provider: p, llm: model, server: s, handler: s.Handler(), accounts: accounts, history: hist, settings: userSettings, calendarRoot: calRoot}
+	return &harness{t: t, provider: p, llm: model, server: s, handler: s.Handler(), accounts: accounts, history: hist, settings: userSettings, calendarRoot: calRoot, release: release}
 }
 
 // whoIs is the user a page says is signed in, or "".

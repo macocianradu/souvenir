@@ -401,7 +401,7 @@ body.plain {
   padding: 12px 28px 24px;
 }
 
-#thread { display: grid; gap: 22px; }
+#thread { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
 
 .landing {
   display: grid;
@@ -504,10 +504,11 @@ body.plain {
 
 /* A reply being written */
 
-.turn { display: grid; gap: 16px; }
+.turn { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 
 .activity {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   margin-left: 50px;
 }
@@ -539,6 +540,7 @@ body.plain {
   max-height: 180px;
   overflow-y: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-style: italic;
   font-size: 14px;
   color: var(--faint);

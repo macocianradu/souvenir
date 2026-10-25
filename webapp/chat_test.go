@@ -722,6 +722,74 @@ func TestHeld_SendingANewMessageRejectsTheWaitingChanges(t *testing.T) {
 	}
 }
 
+func TestHeld_ASlowApplyAnswersAtOnceAndOutlivesTheRequest(t *testing.T) {
+	wait, poll := resolveWait, resolvePoll
+	resolveWait, resolvePoll = 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { resolveWait, resolvePoll = wait, poll })
+	h := newHarness(t)
+	dana := h.as("dana")
+	ctx := users.WithUser(context.Background(), h.user(dana))
+	call := model.ToolCall{Id: "c1", Type: "function", Function: model.FunctionCall{Name: "slow_write", Arguments: `{"what":"categories"}`}}
+	conv, err := h.history.SaveConversation(ctx, model.Conversation{Messages: []model.Message{
+		{Role: "user", Content: "make the categories", Seq: 1},
+		{Role: "assistant", ToolCalls: []model.ToolCall{call}, Seq: 2},
+		{Role: "tool", ToolCallId: "c1", Content: model.Held, Seq: 3},
+		{Role: "assistant", Content: "I'd make them.", Seq: 4},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := h.history.GetConversation(ctx, conv.Id)
+	held := stored.Messages[2].Id
+	applying := `class="held applying" hx-get="/c/` + conv.Id + `/held"`
+
+	// The request answers before the call is done, and the call keeps running
+	// once the request is gone, as when a proxy drops the connection.
+	gone, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequestWithContext(gone, "POST", "/c/"+conv.Id+"/held",
+		strings.NewReader(url.Values{"decision": {"apply"}, "held": {held}, "approve": {held}}.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", "http://souvenir.test")
+	r.AddCookie(dana)
+	if w := h.do(r); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), applying) {
+		t.Fatalf("%d\n%s", w.Code, w.Body.String())
+	}
+	cancel()
+
+	if w := h.get(dana, "/c/"+conv.Id+"/held"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), applying) ||
+		!strings.Contains(w.Body.String(), "slow_write") {
+		t.Fatalf("%d\n%s", w.Code, w.Body.String())
+	}
+	if page := h.get(dana, "/c/"+conv.Id).Body.String(); !strings.Contains(page, applying) || strings.Contains(page, `hx-post="/c/`+conv.Id+`/held"`) {
+		t.Fatalf("the page does not show the changes being applied:\n%s", page)
+	}
+	if w := h.post(dana, "/c/"+conv.Id+"/held", url.Values{"decision": {"apply"}, "held": {held}, "approve": {held}}); w.Code != http.StatusConflict {
+		t.Fatalf("applying twice answered %d", w.Code)
+	}
+	if w := h.post(dana, "/messages", url.Values{"content": {"and now?"}, "conversation": {conv.Id}}); w.Code != http.StatusConflict {
+		t.Fatalf("sending while applying answered %d", w.Code)
+	}
+	if w := h.get(h.as("erin"), "/c/"+conv.Id+"/held"); w.Code != http.StatusNotFound {
+		t.Fatalf("erin sees dana's changes: %d", w.Code)
+	}
+
+	close(h.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		body := h.get(dana, "/c/"+conv.Id+"/held").Body.String()
+		if strings.Contains(body, `class="held resolved"`) && strings.Contains(body, "wrote it") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never finished:\n%s", body)
+		}
+	}
+	after, _ := h.history.GetConversation(ctx, conv.Id)
+	if after.Messages[2].Content != model.Approved+"wrote it" {
+		t.Fatalf("stored result %q", after.Messages[2].Content)
+	}
+}
+
 func TestCallArgs_KeepTheModelsOrderAndUnquoteStrings(t *testing.T) {
 	got := callArgs(`{"summary":"Final","start":"2026-11-14T20:00","exceptions":["2026-11-21"],"n":3}`)
 	want := []heldArg{{"summary", "Final"}, {"start", "2026-11-14T20:00"}, {"exceptions", `["2026-11-21"]`}, {"n", "3"}}

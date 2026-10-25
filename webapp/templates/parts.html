@@ -97,7 +97,16 @@
 <nav id="conversations" hx-swap-oob="innerHTML">{{template "sidebar" .Sidebar}}</nav>
 {{with .Rejected}}{{template "held" .}}{{end}}{{end}}
 
-{{define "held"}}{{if .Resolved}}<section id="{{.Anchor}}" class="held resolved"{{if .Oob}} hx-swap-oob="outerHTML"{{end}}>
+{{define "held"}}{{if .Applying}}<section id="{{.Anchor}}" class="held applying" hx-get="/c/{{.ConversationId}}/held" hx-trigger="load" hx-swap="outerHTML" aria-busy="true">
+  <h3>Applying the changes…</h3>
+  <p class="muted">Large changes can take a few minutes. You can leave this page; they keep running.</p>
+  <ol class="held-calls">{{range .Calls}}
+    <li>
+      <code class="tool">{{.Name}}</code>
+      {{template "held-args" .Args}}
+    </li>{{end}}
+  </ol>
+</section>{{else if .Resolved}}<section id="{{.Anchor}}" class="held resolved"{{if .Oob}} hx-swap-oob="outerHTML"{{end}}>
   <h3>{{if .Calls}}Done{{else}}Nothing changed{{end}}</h3>
   <ol class="held-calls">{{range .Calls}}
     <li class="{{if .Failed}}failed{{else}}ran{{end}}">

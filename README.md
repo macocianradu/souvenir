@@ -69,7 +69,11 @@ answer rather than keep searching. On the web the held calls are listed under
 the reply, each with its tool and arguments and ticked by default; "Apply
 selected" runs the ticked ones as they are, without asking the model again, and
 rejects the rest, and the outcome replaces the call's result in the
-conversation, so the model sees it next turn. Held calls can be approved until
+conversation, so the model sees it next turn. The approved calls run on the
+server whatever happens to the request: if they take more than 20 seconds,
+the page shows them as being applied and checks back until they are done, so a
+proxy's timeout (Cloudflare's is 100 seconds) cannot cut a large batch short,
+and no new message can be sent in that conversation meanwhile. Held calls can be approved until
 the next message is sent; each runs at most once, even when approved from two
 places. Calendar reads are not marked untrusted, since
 changing an event needs its uid from a read first.

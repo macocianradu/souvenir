@@ -95,26 +95,30 @@ func (a *Agent) Resolve(ctx context.Context, results ToolResults, conv model.Con
 	ctx = a.withSettings(ctx)
 	toolCtx := tools.WithTurn(tools.WithConversation(ctx, conv.Id))
 	var resolved []model.Message
+	// Every call is claimed before any runs, so none still looks held while
+	// the approved ones, which can take minutes, are running.
+	var claimed []model.HeldCall
 	for _, held := range model.HeldCalls(conv.Messages) {
 		m := held.Result
+		next := model.Running
 		if !slices.Contains(approved, m.Id) {
-			ok, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Held, model.Rejected)
-			if err != nil {
-				return resolved, err
-			}
-			if ok {
-				m.Content = model.Rejected
-				resolved = append(resolved, m)
-			}
-			continue
+			next = model.Rejected
 		}
-		ok, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Held, model.Running)
+		ok, err := results.ReplaceToolResult(ctx, conv.Id, m.Id, model.Held, next)
 		if err != nil {
 			return resolved, err
 		}
-		if !ok {
-			continue
+		switch {
+		case !ok:
+		case next == model.Rejected:
+			m.Content = model.Rejected
+			resolved = append(resolved, m)
+		default:
+			claimed = append(claimed, held)
 		}
+	}
+	for _, held := range claimed {
+		m := held.Result
 		name := held.Call.Function.Name
 		content := "Error: not run, " + name + " does not wait for approval."
 		if a.tools.Sensitive(ctx, name) {
