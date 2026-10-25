@@ -18,6 +18,10 @@ import (
 
 const financeSummaryRows = 40
 
+// categorySeparator joins a category path: Firefly III categories are flat,
+// so a subcategory is one named "Food / Groceries".
+const categorySeparator = " / "
+
 const financeFilters = `
 	"start": {"type": "string", "description": "First day, YYYY-MM-DD. Default 30 days before end"},
 	"end": {"type": "string", "description": "Last day, YYYY-MM-DD. Default today"},
@@ -229,8 +233,8 @@ func financeTools(client *finance.Client) []Tool {
 		{
 			Name:      "finance_categories",
 			Untrusted: true,
-			Description: "List the categories in the user's Firefly III bookkeeping. Use it before finance_assign, " +
-				"which only takes a category that exists.",
+			Description: "List the categories in the user's Firefly III bookkeeping; a subcategory is named " +
+				"\"Parent / Child\". Use it before finance_assign, which only takes a category that exists.",
 			Parameters: json.RawMessage(`{"type": "object", "properties": {}}`),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				categories, err := client.Categories(ctx)
@@ -275,7 +279,8 @@ func financeTools(client *finance.Client) []Tool {
 			Sensitive: true,
 			Description: "Set the category, the subscription or both on transactions in the user's Firefly III " +
 				"bookkeeping. It changes nothing else, only takes a category from finance_categories or a " +
-				"subscription from finance_subscriptions, and never creates either. Use it when the user asks to " +
+				"subscription from finance_subscriptions, and never creates either (finance_category_create and " +
+				"finance_subscription_create do). Use it when the user asks to " +
 				"categorise transactions or link payments to a subscription; show them what you would change first " +
 				"when they did not say exactly.",
 			Parameters: json.RawMessage(`{
@@ -320,7 +325,7 @@ func financeTools(client *finance.Client) []Tool {
 					}
 					i := slices.IndexFunc(categories, func(c finance.Category) bool { return strings.EqualFold(strings.TrimSpace(c.Name), name) })
 					if i < 0 {
-						return "", fmt.Errorf("no category %q; it has to exist in Firefly III first, so list them with finance_categories", name)
+						return "", fmt.Errorf("no category %q; list them with finance_categories, or create it first with finance_category_create", name)
 					}
 					a.CategoryId = categories[i].Id
 					set = append(set, "category "+categories[i].Name)
@@ -352,6 +357,98 @@ func financeTools(client *finance.Client) []Tool {
 					return "", errors.New("no transaction was changed:\n" + strings.TrimSpace(b.String()))
 				}
 				return fmt.Sprintf("Set %s on %d of %d transactions:\n%s", strings.Join(set, " and "), changed, len(args.Transactions), strings.TrimSpace(b.String())), nil
+			},
+		},
+		{
+			Name:      "finance_category_create",
+			Sensitive: true,
+			Description: "Create categories and subcategories in the user's Firefly III bookkeeping. Firefly III " +
+				"categories are flat, so a subcategory is a category named \"Parent / Child\", and any parent in " +
+				"the path that is missing is created too. It only creates; it cannot rename or delete one, and " +
+				"skips a name that already exists. Check finance_categories first, and set them on transactions " +
+				"with finance_assign.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"categories": {"type": "array", "maxItems": 50, "description": "The categories to create",
+						"items": {"type": "object", "properties": {
+							"name": {"type": "string", "description": "Such as \"Groceries\""},
+							"parent": {"type": "string", "description": "For a subcategory, its parent's name, such as \"Food\" or \"Home / Utilities\". Leave out for a top-level category"}
+						}, "required": ["name"]}}
+				},
+				"required": ["categories"]
+			}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args struct {
+					Categories []struct {
+						Name   string `json:"name"`
+						Parent string `json:"parent"`
+					} `json:"categories"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return "", err
+				}
+				switch {
+				case len(args.Categories) == 0:
+					return "", errors.New("name at least one category")
+				case len(args.Categories) > 50:
+					return "", errors.New("at most 50 categories at a time")
+				}
+				var paths [][]string
+				for _, c := range args.Categories {
+					path, err := categoryPath(c.Parent, c.Name)
+					if err != nil {
+						return "", err
+					}
+					paths = append(paths, path)
+				}
+				categories, err := client.Categories(ctx)
+				if err != nil {
+					return "", err
+				}
+				// existing maps a lower-cased name to its spelling in Firefly III,
+				// so a path under an existing category keeps that spelling.
+				existing := map[string]string{}
+				for _, c := range categories {
+					name := strings.Join(splitCategory(c.Name), categorySeparator)
+					existing[strings.ToLower(name)] = name
+				}
+				var created, skipped []string
+				for _, path := range paths {
+					name := ""
+					for i, part := range path {
+						if i > 0 {
+							name += categorySeparator
+						}
+						name += part
+						if spelled, ok := existing[strings.ToLower(name)]; ok {
+							name = spelled
+							if i == len(path)-1 && !slices.Contains(created, name) {
+								skipped = append(skipped, name)
+							}
+							continue
+						}
+						if _, err := client.CreateCategory(ctx, name); err != nil {
+							out := fmt.Sprintf("could not create %q: %v", name, err)
+							if len(created) > 0 {
+								out += "; created before that: " + strings.Join(created, ", ")
+							}
+							return "", errors.New(out)
+						}
+						existing[strings.ToLower(name)] = name
+						created = append(created, name)
+					}
+				}
+				var b strings.Builder
+				if len(created) == 0 {
+					b.WriteString("Created nothing.")
+				} else {
+					b.WriteString("Created:\n- " + strings.Join(created, "\n- "))
+				}
+				if len(skipped) > 0 {
+					b.WriteString("\nAlready existed:\n- " + strings.Join(skipped, "\n- "))
+				}
+				return b.String(), nil
 			},
 		},
 		{
@@ -450,6 +547,32 @@ func financeTools(client *finance.Client) []Tool {
 			},
 		},
 	}
+}
+
+// categoryPath is the category name under parent as its parts, each trimmed.
+// Only " / " separates parts, so a name such as "Gas/Electricity" stays whole.
+func categoryPath(parent, name string) ([]string, error) {
+	path := append(splitCategory(parent), splitCategory(name)...)
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("every category needs a name")
+	}
+	for _, p := range path {
+		if p == "" {
+			return nil, fmt.Errorf("category %q has an empty part", strings.Join(path, categorySeparator))
+		}
+	}
+	return path, nil
+}
+
+func splitCategory(name string) []string {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	parts := strings.Split(name, categorySeparator)
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	return parts
 }
 
 type financeArgs struct {

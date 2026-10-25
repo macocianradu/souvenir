@@ -56,8 +56,18 @@ func fireflyServer(t *testing.T, seen *[]string) *finance.Client {
 				{"id":"1","attributes":{"name":"Checking","type":"asset","account_role":"defaultAsset","active":true,"currency_code":"EUR","current_balance":"1200.5","iban":"BE00 1234"}},
 				{"id":"2","attributes":{"name":"Savings","type":"asset","account_role":"savingAsset","active":true,"currency_code":"EUR","current_balance":"5000"}}
 			],"meta":{"pagination":{"total":2,"total_pages":1}}}`))
-		case path == "/api/v1/categories":
-			w.Write([]byte(`{"data":[{"id":"3","attributes":{"name":"Groceries"}},{"id":"4","attributes":{"name":"electronics"}}],"meta":{"pagination":{"total_pages":1}}}`))
+		case path == "/api/v1/categories" && r.Method == "GET":
+			w.Write([]byte(`{"data":[{"id":"3","attributes":{"name":"Groceries"}},{"id":"4","attributes":{"name":"electronics"}},
+				{"id":"5","attributes":{"name":"Home / Gas/Electricity"}}],"meta":{"pagination":{"total_pages":1}}}`))
+		case path == "/api/v1/categories" && r.Method == "POST":
+			var in map[string]any
+			json.Unmarshal(body, &in)
+			if in["name"] == "Broken" {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				w.Write([]byte(`{"message":"The given data was invalid.","errors":{"name":["This value is invalid."]}}`))
+				return
+			}
+			fmt.Fprintf(w, `{"data":{"id":"20","attributes":{"name":%q}}}`, in["name"])
 		case path == "/api/v1/bills" && r.Method == "GET":
 			w.Write([]byte(`{"data":[{"id":"8","attributes":{"name":"Netflix","amount_min":"13.99","amount_max":"13.99","currency_code":"EUR",
 				"repeat_freq":"monthly","skip":0,"active":true,"next_expected_match":"2026-11-03T00:00:00+01:00"}}],"meta":{"pagination":{"total_pages":1}}}`))
@@ -90,7 +100,7 @@ func fireflyServer(t *testing.T, seen *[]string) *finance.Client {
 func TestFinanceTools_OnlyForTheNamedUsers(t *testing.T) {
 	var seen []string
 	p := FinanceTools(fireflyServer(t, &seen), []string{"radu"})
-	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "1", Name: "radu"})); len(got) != 8 {
+	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "1", Name: "radu"})); len(got) != 9 {
 		t.Fatalf("radu gets %d tools", len(got))
 	}
 	if got := p.Tools(users.WithUser(context.Background(), users.User{Id: "2", Name: "guest"})); got != nil {
@@ -100,7 +110,7 @@ func TestFinanceTools_OnlyForTheNamedUsers(t *testing.T) {
 		t.Fatal("a request without a user is offered the finance tools")
 	}
 	for _, tool := range p.Catalog {
-		writes := tool.Name == "finance_assign" || tool.Name == "finance_subscription_create"
+		writes := tool.Name == "finance_assign" || tool.Name == "finance_subscription_create" || tool.Name == "finance_category_create"
 		if writes != tool.Sensitive {
 			t.Fatalf("%s: sensitive is %v", tool.Name, tool.Sensitive)
 		}
@@ -272,7 +282,45 @@ func TestFinanceSubscriptionCreate(t *testing.T) {
 	if out := runTool(t, tools, "finance_subscriptions", `{}`); out != "Netflix [subscription_id: 8]: 13.99 EUR monthly, next due 2026-11-03" {
 		t.Fatal(out)
 	}
-	if out := runTool(t, tools, "finance_categories", `{}`); out != "electronics\nGroceries" {
+	if out := runTool(t, tools, "finance_categories", `{}`); out != "electronics\nGroceries\nHome / Gas/Electricity" {
 		t.Fatal(out)
+	}
+}
+
+func TestFinanceCategoryCreate_MakesMissingParents(t *testing.T) {
+	var seen []string
+	tools := financeTools(fireflyServer(t, &seen))
+	out := runTool(t, tools, "finance_category_create", `{"categories":[
+		{"name":"Restaurants","parent":"Food "},
+		{"name":"Food"},
+		{"name":"Water","parent":"Home / gas/electricity"},
+		{"name":"groceries"},
+		{"name":"Food / restaurants"},
+		{"name":"Home / Internet"}]}`)
+	want := "Created:\n- Food\n- Food / Restaurants\n- Home\n- Home / Gas/Electricity / Water\n- Home / Internet\nAlready existed:\n- Groceries"
+	if out != want {
+		t.Fatalf("got\n%s\nwant\n%s", out, want)
+	}
+	var posts []string
+	for _, s := range seen {
+		if strings.HasPrefix(s, "POST ") {
+			posts = append(posts, s)
+		} else if !strings.HasPrefix(s, "GET ") {
+			t.Fatalf("sent %s", s)
+		}
+	}
+	if len(posts) != 5 || posts[0] != `POST /api/v1/categories? {"name":"Food"}` || posts[2] != `POST /api/v1/categories? {"name":"Home"}` {
+		t.Fatalf("sent\n%s", strings.Join(posts, "\n"))
+	}
+
+	for args, want := range map[string]string{
+		`{"categories":[]}`:                                     "Error: name at least one category",
+		`{"categories":[{"name":" ","parent":"Food"}]}`:         "Error: every category needs a name",
+		`{"categories":[{"name":"Tea","parent":"Food /  / "}]}`: `Error: category "Food /  /  / Tea" has an empty part`,
+		`{"categories":[{"name":"Pets"},{"name":"Broken"}]}`:    `Error: could not create "Broken": firefly iii refused the request: name: This value is invalid.; created before that: Pets`,
+	} {
+		if got := runTool(t, tools, "finance_category_create", args); got != want {
+			t.Fatalf("%s:\n got %s\nwant %s", args, got, want)
+		}
 	}
 }

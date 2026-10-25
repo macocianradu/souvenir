@@ -1,7 +1,7 @@
 // Package finance reads a Firefly III server's accounts and transactions
 // through its REST API. Its only writes are setting a transaction's category
-// or subscription and creating a subscription; it never edits or deletes
-// anything else.
+// or subscription and creating a category or a subscription; it never edits
+// or deletes anything else.
 package finance
 
 import (
@@ -273,6 +273,17 @@ func (c *Client) Assign(ctx context.Context, g Group, journals []string, a Assig
 	}
 	if err := c.do(ctx, "PUT", "/api/v1/transactions/"+url.PathEscape(g.Id), update, &resp); err != nil {
 		return Group{}, err
+	}
+	resp.Data.Attributes.Id = resp.Data.Id
+	return resp.Data.Attributes, nil
+}
+
+func (c *Client) CreateCategory(ctx context.Context, name string) (Category, error) {
+	var resp struct {
+		Data item[Category] `json:"data"`
+	}
+	if err := c.do(ctx, "POST", "/api/v1/categories", Category{Name: name}, &resp); err != nil {
+		return Category{}, err
 	}
 	resp.Data.Attributes.Id = resp.Data.Id
 	return resp.Data.Attributes, nil

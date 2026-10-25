@@ -60,7 +60,7 @@ Text written by others can carry instructions aimed at the model, so tools are
 marked untrusted (`web_search`, `web_fetch` and the news, monitoring and finance tools)
 or sensitive (`memory_save`, `memory_update`, `memory_forget`,
 `calendar_create`, `calendar_update`, `calendar_delete`, `finance_assign`,
-`finance_subscription_create`). Untrusted output is
+`finance_category_create`, `finance_subscription_create`). Untrusted output is
 wrapped in `<untrusted source="...">` tags the model is told never to take
 instructions from, and once an untrusted tool has run, sensitive calls are
 held for the rest of that turn: the call is not run, and the model gets one
@@ -370,13 +370,17 @@ field), `finance_categories` and `finance_subscriptions`. Periods default to
 the last 30 days and are read in full up to 10,000 transactions, filtered in
 souvenir, so totals are exact rather than an estimate from one page.
 
-It can write two things and nothing else. `finance_assign` sets an existing
+It can write three things and nothing else. `finance_assign` sets an existing
 category, an existing subscription or both on up to 50 transactions (or one
 split of a split transaction), without running Firefly's rules; it never
 creates a category or touches amounts, dates, accounts or descriptions.
+`finance_category_create` adds up to 50 categories at a time, skipping names
+that exist. Firefly's categories are flat, so a subcategory is a category named
+`Parent / Child` (only a spaced ` / ` separates, so `Gas/Electricity` stays one
+name), and a missing parent anywhere in the path is created too.
 `finance_subscription_create` adds a subscription (a bill, in Firefly's API),
-refusing a name that exists; nothing can change or delete one. Both are
-sensitive, and since every finance read is untrusted, a write that follows a
+refusing a name that exists. Nothing can rename or delete a category or a
+subscription. All three are sensitive, and since every finance read is untrusted, a write that follows a
 read in the same turn is held for the user's approval. The client has no other
 write requests, but Firefly's personal access tokens are not scoped, so the
 token itself could do more: keep it to souvenir.
