@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"git.estatecloud.org/radumaco/souvenir/db/users"
 	"git.estatecloud.org/radumaco/souvenir/llm"
@@ -148,7 +149,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Memory, 
 	if s.embedder != nil {
 		maxDistance = s.embedder.MaxDistance()
 	}
-	found, err := s.search(ctx, query, s.embedQuery(ctx, query), limit, maxDistance)
+	found, err := s.search(ctx, query, anyOf(query), s.embedQuery(ctx, query), limit, maxDistance)
 	return memories(found), err
 }
 
@@ -175,7 +176,7 @@ func (s *Store) Recall(ctx context.Context, message string, limit int) ([]Memory
 			}
 		}
 	}
-	found, err := s.search(ctx, message, vec, limit, maxDistance)
+	found, err := s.search(ctx, message, "", vec, limit, maxDistance)
 	for _, h := range found {
 		switch {
 		case h.distance == nil:
@@ -214,12 +215,12 @@ func memories(hits []hit) []Memory {
 	return found
 }
 
-func (s *Store) search(ctx context.Context, query string, vec []float32, limit int, maxDistance float64) ([]hit, error) {
+func (s *Store) search(ctx context.Context, query, anyQuery string, vec []float32, limit int, maxDistance float64) ([]hit, error) {
 	userId, err := users.Id(ctx)
 	if err != nil {
 		return nil, err
 	}
-	args := []any{query, limit, userId}
+	args := []any{query, limit, userId, anyQuery}
 	vectorLeg := `SELECT NULL::uuid AS id, NULL::bigint AS rank, NULL::float8 AS distance WHERE false`
 	if vec != nil {
 		args = append(args, pgvector.NewVector(vec), maxDistance, s.embedder.DistanceMargin())
@@ -228,22 +229,31 @@ func (s *Store) search(ctx context.Context, query string, vec []float32, limit i
 			  FROM (
 				  SELECT id, distance, min(distance) OVER () AS best
 				    FROM (
-				  SELECT v.memory_id AS id, v.embedding <=> $4 AS distance
+				  SELECT v.memory_id AS id, v.embedding <=> $5 AS distance
 				    FROM %s v
 				    JOIN memories m ON m.id = v.memory_id AND m.content_hash = v.content_hash
 				   WHERE m.user_id = $3
-				     AND ($5::float8 = 0 OR v.embedding <=> $4 <= $5)
+				     AND ($6::float8 = 0 OR v.embedding <=> $5 <= $6)
 				) nearest
 			  ) scored
-			 WHERE $6::float8 = 0 OR distance <= best + $6`, s.tableName)
+			 WHERE $7::float8 = 0 OR distance <= best + $7`, s.tableName)
 	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		WITH keyword AS (
+		WITH keyword_all AS (
 			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank, NULL::float8 AS distance
 			  FROM memories m, websearch_to_tsquery('english', $1) q
 			 WHERE m.tsv @@ q
 			   AND m.user_id = $3
 		),
+		keyword_any AS (
+			SELECT m.id, row_number() OVER (ORDER BY ts_rank_cd(m.tsv, q) DESC) AS rank, NULL::float8 AS distance
+			  FROM memories m, websearch_to_tsquery('english', $4) q
+			 WHERE $4 <> ''
+			   AND NOT EXISTS (SELECT 1 FROM keyword_all)
+			   AND m.tsv @@ q
+			   AND m.user_id = $3
+		),
+		keyword AS (SELECT * FROM keyword_all UNION ALL SELECT * FROM keyword_any),
 		vector AS (%s),
 		fused AS (
 			  SELECT id, sum(1.0 / (60 + rank)) AS score, min(distance) AS distance
@@ -264,6 +274,42 @@ func (s *Store) search(ctx context.Context, query string, vec []float32, limit i
 		var h hit
 		return h, row.Scan(&h.Id, &h.Content, &h.CreatedAt, &h.distance)
 	})
+}
+
+// anyOf rewrites a websearch query so that any one of its words or quoted
+// phrases matches, or returns "" when that would not widen it.
+func anyOf(query string) string {
+	var terms []string
+	var term strings.Builder
+	quoted := false
+	flush := func() {
+		if t := term.String(); t != "" && !strings.EqualFold(t, "or") {
+			terms = append(terms, t)
+		}
+		term.Reset()
+	}
+	for _, r := range query {
+		switch {
+		case r == '"':
+			term.WriteRune(r)
+			quoted = !quoted
+		case unicode.IsSpace(r) && !quoted:
+			flush()
+		default:
+			term.WriteRune(r)
+		}
+	}
+	flush()
+	for _, t := range terms {
+		// "a or -b" would match nearly everything.
+		if strings.HasPrefix(t, "-") {
+			return ""
+		}
+	}
+	if len(terms) < 2 {
+		return ""
+	}
+	return strings.Join(terms, " or ")
 }
 
 func (s *Store) Backfill(ctx context.Context) error {
