@@ -266,8 +266,8 @@ func (t *turn) context() []model.Message {
 	if len(t.memories) > 0 {
 		var b strings.Builder
 		b.WriteString("Facts saved about the user in earlier conversations, with their ids. Use them when " +
-			"relevant. When the user says something that refines, corrects or replaces one of them, call " +
-			"memory_update with its id rather than saving a new memory.")
+			"relevant. When the user says something that changes one of them, call memory_update with its id " +
+			"rather than saving a new memory; something related but new is a memory of its own.")
 		for _, mem := range t.memories {
 			b.WriteString("\n- [" + mem.Id + "] " + mem.Content)
 		}

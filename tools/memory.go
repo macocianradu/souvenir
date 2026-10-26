@@ -16,14 +16,16 @@ func MemoryTools(store *memory.Store) []Tool {
 			Name:      "memory_save",
 			Sensitive: true,
 			Description: "Save a durable fact for future conversations: the user's preferences, personal details, " +
-				"people and places in their life, ongoing projects and decisions. One self-contained fact per call, " +
-				"written in the third person (\"The user is vegetarian\"). Do not save small talk or things that only " +
-				"matter in this conversation. If what the user says refines or replaces a fact already remembered " +
-				"(a date added, a new job, a changed preference), use memory_update on that memory instead of " +
-				"saving a second one; search first when unsure.",
+				"people and places in their life, ongoing projects and decisions. One fact per call: one topic, " +
+				"a sentence or two that answers one question about the user, written in the third person " +
+				"(\"The user is vegetarian\"). Several facts from one message are several calls. Do not save small " +
+				"talk or things that only matter in this conversation. If what the user says changes a fact already " +
+				"remembered (a corrected number, a date added, a new job, a changed preference), use memory_update " +
+				"on that memory instead of saving a second one. Something related but new, such as another detail " +
+				"on the same subject, is a fact of its own: save it. Search first when unsure.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
-				"properties": {"content": {"type": "string", "description": "The fact, as one self-contained sentence"}},
+				"properties": {"content": {"type": "string", "description": "The fact: one topic, a sentence or two"}},
 				"required": ["content"]
 			}`),
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -90,9 +92,11 @@ func MemoryTools(store *memory.Store) []Tool {
 		{
 			Name:      "memory_update",
 			Sensitive: true,
-			Description: "Rewrite a saved memory when new information refines, corrects or replaces it, keeping " +
-				"one fact instead of two. The new content replaces the old completely, so include everything that " +
-				"still holds (\"The user works at Odoo\" becomes \"The user has worked at Odoo since September 2025\").",
+			Description: "Rewrite a saved memory when new information changes that fact: corrects it, refines it " +
+				"or replaces it. Related but separate information belongs in memory_save, not here. The new content " +
+				"replaces the old completely, so include everything about that fact that still holds (\"The user " +
+				"works at Odoo\" becomes \"The user has worked at Odoo since September 2025\"). If the memory has " +
+				"grown to cover several topics, update it to keep one and memory_save each of the others.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
